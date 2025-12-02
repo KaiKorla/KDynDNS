@@ -1,0 +1,28 @@
+[Unit]
+Description=KORLA.cloud DynDNS Update Service
+After=network.target
+
+[Service]
+User=kdyndns
+Group=kdyndns
+
+Environment="KDYNDNS_SOCKET=/run/kdyndns/kdyndns.sock"
+Environment="KDYNDNS_CONFIG=/etc/kdyndns/config.toml"
+Environment="RUST_LOG=info"
+
+RuntimeDirectory=kdyndns
+RuntimeDirectoryMode=0750
+
+ExecStart=/usr/local/bin/kdyndns
+ExecReload=/bin/kill -SIGUSR1 $MAINPID
+
+# journald-kompatibel
+StandardOutput=journal
+StandardError=journal
+
+# Restart Policy
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

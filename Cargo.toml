@@ -1,0 +1,18 @@
+[package]
+name = "kdyndns"
+version = "1.0.0"
+edition = "2024"
+
+[dependencies]
+actix-web = "4"
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+base64 = "0.22"
+argon2 = "0.5"
+password-hash = "0.5"
+rpassword = "7"
+rand = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }

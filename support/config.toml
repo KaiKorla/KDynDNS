@@ -1,0 +1,6 @@
+[[users]]
+server = "127.0.0.1"
+tsig_key_path = "/etc/bind/keys/dyn.key"
+username = "user1"
+password_hash = "$argon2id$v=19$m=65536,t=3,p=1$...the_hash..."
+allowed_hosts = ["myhost.domain.tld."]
