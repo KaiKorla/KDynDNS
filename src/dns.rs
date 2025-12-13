@@ -91,11 +91,9 @@ impl DnsUpdater for NsupdateDnsUpdater {
             writeln!(stdin, "server {}", user.server).unwrap();
             writeln!(stdin, "zone {}", zone).unwrap();
 
-            // Immer alles löschen
             writeln!(stdin, "update delete {} A", fqdn).unwrap();
             writeln!(stdin, "update delete {} AAAA", fqdn).unwrap();
 
-            // Neue Einträge setzen
             if let Some(ip) = ip4 {
                 writeln!(stdin, "update add {} {} A {}", fqdn, ttl, ip).unwrap();
             }

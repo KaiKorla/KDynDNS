@@ -44,7 +44,6 @@ pub async fn update(
         }
     };
 
-    // Host normalisieren (immer FQDN mit Punkt)
     let host_norm = if query.host.ends_with('.') {
         query.host.trim().to_string()
     } else {
