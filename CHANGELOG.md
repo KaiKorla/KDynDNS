@@ -6,7 +6,10 @@ The format is based on <https://keepachangelog.com/en/1.0.0/>
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Changed
+
+- **Breaking:** `/update` query parameters renamed to `ipv4` / `ipv6`; clients must switch from the old IP fields.
+- Update logging now includes normalized host and both IP versions; request validation tightened.
 
 ---
 

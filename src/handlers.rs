@@ -10,8 +10,8 @@ use crate::dns::DnsError;
 #[derive(Deserialize)]
 pub struct UpdateQuery {
     pub host: String,
-    pub ip4: Option<String>,
-    pub ip6: Option<String>,
+    pub ipv4: Option<String>,
+    pub ipv6: Option<String>,
 }
 
 #[get("/health")]
@@ -58,36 +58,36 @@ pub async fn update(
         return HttpResponse::Forbidden().body("Host not allowed");
     }
 
-    if query.ip4.is_none() && query.ip6.is_none() {
-        return HttpResponse::BadRequest().body("At least one of ip4 or ip6 required");
+    if query.ipv4.is_none() && query.ipv6.is_none() {
+        return HttpResponse::BadRequest().body("At least one of ipv4 or ipv6 required");
     }
 
-    let ip4: Option<Ipv4Addr> = match &query.ip4 {
+    let ipv4: Option<Ipv4Addr> = match &query.ipv4 {
         Some(v) if !v.trim().is_empty() => match v.trim().parse() {
             Ok(ip) => Some(ip),
-            Err(_) => return HttpResponse::BadRequest().body("Invalid ip4 format"),
+            Err(_) => return HttpResponse::BadRequest().body("Invalid ipv4 format"),
         },
         _ => None,
     };
 
-    let ip6: Option<Ipv6Addr> = match &query.ip6 {
+    let ipv6: Option<Ipv6Addr> = match &query.ipv6 {
         Some(v) if !v.trim().is_empty() => match v.trim().parse() {
             Ok(ip) => Some(ip),
-            Err(_) => return HttpResponse::BadRequest().body("Invalid ip6 format"),
+            Err(_) => return HttpResponse::BadRequest().body("Invalid ipv6 format"),
         },
         _ => None,
     };
 
-    if ip4.is_none() && ip6.is_none() {
-        return HttpResponse::BadRequest().body("ip4/ip6 empty or invalid");
+    if ipv4.is_none() && ipv6.is_none() {
+        return HttpResponse::BadRequest().body("ipv4/ipv6 empty or invalid");
     }
 
     info!(
-        "Update request: user={}, host={}, ip4={:?}, ip6={:?}",
-        username, host_norm, ip4, ip6
+        "Update request: user={}, host={}, ipv4={:?}, ipv6={:?}",
+        username, host_norm, ipv4, ipv6
     );
 
-    match state.updater.update_records(user, &host_norm, ip4, ip6) {
+    match state.updater.update_records(user, &host_norm, ipv4, ipv6) {
         Ok(()) => HttpResponse::Ok().body("OK"),
         Err(DnsError::InvalidHost) => HttpResponse::BadRequest().body("Invalid host"),
         Err(DnsError::UpdateFailed(e)) => {
@@ -112,7 +112,6 @@ mod tests {
     use crate::dns::MockDnsUpdater;
 
     fn build_test_state(should_fail: bool) -> AppState {
-        // Passwort "secret"
         let salt = SaltString::generate(&mut OsRng);
         let argon2 = argon2::Argon2::default();
         let hash = argon2.hash_password(b"secret", &salt).unwrap().to_string();
@@ -156,7 +155,7 @@ mod tests {
             test::init_service(App::new().app_data(web::Data::new(state)).service(update)).await;
 
         let req = test::TestRequest::get()
-            .uri("/update?host=test.example.com.&ip4=1.2.3.4")
+            .uri("/update?host=test.example.com.&ipv4=1.2.3.4")
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), 401);
@@ -170,7 +169,7 @@ mod tests {
 
         let token = BASE64_STANDARD.encode("user:secret");
         let req = test::TestRequest::get()
-            .uri("/update?host=test.example.com.&ip4=1.2.3.4")
+            .uri("/update?host=test.example.com.&ipv4=1.2.3.4")
             .append_header(("Authorization", format!("Basic {}", token)))
             .to_request();
 
@@ -186,7 +185,7 @@ mod tests {
 
         let token = BASE64_STANDARD.encode("user:secret");
         let req = test::TestRequest::get()
-            .uri("/update?host=test.example.com.&ip4=1.2.3.4")
+            .uri("/update?host=test.example.com.&ipv4=1.2.3.4")
             .append_header(("Authorization", format!("Basic {}", token)))
             .to_request();
 

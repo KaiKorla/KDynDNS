@@ -20,8 +20,8 @@ pub trait DnsUpdater: Send + Sync {
         &self,
         user: &UserConfig,
         host: &str,
-        ip4: Option<Ipv4Addr>,
-        ip6: Option<Ipv6Addr>,
+        ipv4: Option<Ipv4Addr>,
+        ipv6: Option<Ipv6Addr>,
     ) -> Result<(), DnsError>;
 }
 
@@ -61,16 +61,16 @@ impl DnsUpdater for NsupdateDnsUpdater {
         &self,
         user: &UserConfig,
         host: &str,
-        ip4: Option<Ipv4Addr>,
-        ip6: Option<Ipv6Addr>,
+        ipv4: Option<Ipv4Addr>,
+        ipv6: Option<Ipv6Addr>,
     ) -> Result<(), DnsError> {
         let (zone, fqdn) = derive_zone_and_fqdn(host)?;
 
         let ttl = 60;
 
         info!(
-            "DNS update via nsupdate: user={}, zone={}, fqdn={}, ip4={:?}, ip6={:?}",
-            user.username, zone, fqdn, ip4, ip6
+            "DNS update via nsupdate: user={}, zone={}, fqdn={}, ipv4={:?}, ipv6={:?}",
+            user.username, zone, fqdn, ipv4, ipv6
         );
 
         let mut cmd = Command::new("nsupdate")
@@ -94,10 +94,10 @@ impl DnsUpdater for NsupdateDnsUpdater {
             writeln!(stdin, "update delete {} A", fqdn).unwrap();
             writeln!(stdin, "update delete {} AAAA", fqdn).unwrap();
 
-            if let Some(ip) = ip4 {
+            if let Some(ip) = ipv4 {
                 writeln!(stdin, "update add {} {} A {}", fqdn, ttl, ip).unwrap();
             }
-            if let Some(ip) = ip6 {
+            if let Some(ip) = ipv6 {
                 writeln!(stdin, "update add {} {} AAAA {}", fqdn, ttl, ip).unwrap();
             }
 
@@ -140,13 +140,13 @@ impl DnsUpdater for MockDnsUpdater {
         &self,
         _user: &UserConfig,
         host: &str,
-        ip4: Option<Ipv4Addr>,
-        ip6: Option<Ipv6Addr>,
+        ipv4: Option<Ipv4Addr>,
+        ipv6: Option<Ipv6Addr>,
     ) -> Result<(), DnsError> {
         self.calls
             .lock()
             .unwrap()
-            .push((host.to_string(), ip4, ip6));
+            .push((host.to_string(), ipv4, ipv6));
         if self.should_fail {
             Err(DnsError::UpdateFailed("mock failure".into()))
         } else {
