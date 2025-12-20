@@ -10,6 +10,34 @@ No unreleased changes yet.
 
 ---
 
+## [3.0.0] - 2025-12-20
+
+### Added
+
+- systemd socket activation: reuses a socket passed in by systemd before binding its own `/run/kdyndns/kdyndns.sock`, enabling socket-managed startup and permissions.
+
+### Changed
+
+- Documentation now highlights the systemd socket handling flow to set up matching service/socket units.
+
+### Deprecated
+
+No deprecated features.
+
+### Removed
+
+No removed features.
+
+### Fixed
+
+No bug fixes in this set of staged changes.
+
+### Security
+
+No security updates.
+
+---
+
 ## [2.0.0] - 2025-12-20
 
 ### Added

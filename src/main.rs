@@ -1,4 +1,5 @@
 use actix_web::{App, HttpServer, web};
+use listenfd::ListenFd;
 use std::env;
 use std::sync::{Arc, RwLock};
 use tokio::signal::unix::{SignalKind, signal};
@@ -26,8 +27,6 @@ async fn main() -> std::io::Result<()> {
         .compact()
         .init();
 
-    let socket_path =
-        env::var("KDYNDNS_SOCKET").unwrap_or_else(|_| "/run/kdyndns.sock".to_string());
     let config_path =
         env::var("DYNDNS_CONFIG").unwrap_or_else(|_| "/etc/kdyndns/config.toml".to_string());
 
@@ -41,7 +40,6 @@ async fn main() -> std::io::Result<()> {
         updater: updater.clone(),
     };
 
-    // Reload-Task (SIGUSR1)
     let reload_state = state.clone();
     let config_path_clone = config_path.clone();
     tokio::spawn(async move {
@@ -62,17 +60,25 @@ async fn main() -> std::io::Result<()> {
         }
     });
 
-    let _ = std::fs::remove_file(&socket_path);
-
-    info!("KDynDNS is listening on unix socket: {}", socket_path);
-
-    HttpServer::new(move || {
+    let mut server = HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(state.clone()))
             .service(handlers::health)
             .service(handlers::update)
-    })
-    .bind_uds(&socket_path)?
-    .run()
-    .await
+    });
+
+    let mut listenfd = ListenFd::from_env();
+
+    server = if let Some(listener) = listenfd.take_unix_listener(0)? {
+        server.listen_uds(listener)?
+    } else {
+        server.bind_uds("/run/kdyndns/kdyndns.sock")?
+    };
+
+    info!(
+        "KDynDNS is listening on unix socket: {:#?}",
+        server.addrs_with_scheme()
+    );
+
+    server.run().await
 }

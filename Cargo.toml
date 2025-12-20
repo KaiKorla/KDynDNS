@@ -1,6 +1,6 @@
 [package]
 name = "kdyndns"
-version = "1.0.0"
+version = "3.0.0"
 edition = "2024"
 
 [dependencies]
@@ -16,3 +16,4 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+listenfd = "1.0.2"

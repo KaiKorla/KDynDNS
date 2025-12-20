@@ -5,6 +5,7 @@ A minimalistic DynDNS service written in Rust.
 ## Design & Features
 
 - reverse-proxy operation mode (nginx) via unix-socket
+- systemd socket activation support (reuses the provided unix-socket before binding its own)
 - simple and plain TOML configuration file (see below)
 - HTTP basic auth and Argon2id hashing of the credentials
 - IPv4 and IPv6 support including removing of existing entries
@@ -72,6 +73,9 @@ Create the password hash:
 
 ### From source
 
-export KDynDNS=/run/kdyndns.sock
 export KDynDNS=/etc/kdyndns/config.toml
 cargo run --release
+
+## Systemd socket activation
+
+When started via systemd with a socket unit, KDynDNS will reuse the pre-opened unix-socket passed in through systemd (LISTEN_FDS). If no socket is provided it falls back to binding `/run/kdyndns/kdyndns.sock` itself. Pair the service with a matching socket unit so systemd manages creation and permissions of the socket.
