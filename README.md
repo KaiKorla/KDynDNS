@@ -76,6 +76,25 @@ Create the password hash:
 export KDynDNS=/etc/kdyndns/config.toml
 cargo run --release
 
+## HTTP API
+
+- Transport: HTTP over the unix socket provided by systemd or bound at `/run/kdyndns/kdyndns.sock`; typically fronted by nginx.
+- Authentication: HTTP Basic Auth; users and allowed hosts come from `config.toml`.
+- Health check: `GET /health` returns `200 OK` and body `OK` without authentication.
+- Update endpoint: `GET /update` with Basic Auth. Query parameters:
+  - `host` (required) — trailing dot optional; normalized to a fully qualified name with trailing dot and must be listed in `allowed_hosts` for the authenticated user.
+  - `ipv4` (optional) — IPv4 literal; empty or invalid values rejected.
+  - `ipv6` (optional) — IPv6 literal; empty or invalid values rejected.
+  - At least one of `ipv4` or `ipv6` must be present and valid.
+- Responses: `200 OK` on success; `400` for missing/invalid params; `401` for missing/invalid credentials (with `WWW-Authenticate`); `403` if the host is not allowed; `500` if the DNS update fails.
+- Example using curl on the unix socket:
+
+    ```bash
+    curl --unix-socket /run/kdyndns/kdyndns.sock \
+      -u "user1:your-password" \
+      "http://localhost/update?host=myhost.example.com&ipv4=203.0.113.10&ipv6=2001:db8::10"
+    ```
+
 ## Systemd socket activation
 
 When started via systemd with a socket unit, KDynDNS will reuse the pre-opened unix-socket passed in through systemd (LISTEN_FDS). If no socket is provided it falls back to binding `/run/kdyndns/kdyndns.sock` itself. Pair the service with a matching socket unit so systemd manages creation and permissions of the socket.
