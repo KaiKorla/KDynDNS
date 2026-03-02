@@ -10,6 +10,33 @@ No unreleased changes yet.
 
 ---
 
+## [3.0.1] - 2026-03-02
+
+### Added
+
+No new features.
+
+### Changed
+
+- Updated project dependencies to current crate versions.
+- Regenerated `Cargo.lock`.
+
+### Deprecated
+
+No deprecated features.
+
+### Removed
+
+No removed features.
+
+### Fixed
+
+No bug fixes.
+
+### Security
+
+- No security-specific changes documented.
+
 ## [3.0.0] - 2025-12-20
 
 ### Added
@@ -65,8 +92,6 @@ No bug fixes in this set of staged changes.
 ### Security
 
 No security updates.
-
----
 
 ---
 
