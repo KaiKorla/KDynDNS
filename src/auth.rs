@@ -1,7 +1,7 @@
 use actix_web::HttpRequest;
+use argon2::password_hash::PasswordHash;
 use argon2::{Argon2, PasswordVerifier};
 use base64::prelude::*;
-use password_hash::PasswordHash;
 use tracing::warn;
 
 use crate::config::{AppConfig, UserConfig};
@@ -55,9 +55,9 @@ mod tests {
     use super::*;
     use crate::config::{AppConfig, UserConfig};
     use actix_web::test::TestRequest;
+    use argon2::password_hash::rand_core::OsRng;
+    use argon2::password_hash::SaltString;
     use argon2::PasswordHasher;
-    use password_hash::SaltString;
-    use rand::rngs::OsRng;
 
     fn build_test_config() -> AppConfig {
         let salt = SaltString::generate(&mut OsRng);

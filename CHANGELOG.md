@@ -6,7 +6,29 @@ The format is based on <https://keepachangelog.com/en/1.0.0/>
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+No new features.
+
+### Changed
+
+No changes yet.
+
+### Deprecated
+
+No deprecated features.
+
+### Removed
+
+No removed features.
+
+### Fixed
+
+- Fixed compile errors after dependency updates by switching password-hash and RNG imports to the `argon2` re-exported paths used by current crate versions.
+
+### Security
+
+No security updates.
 
 ---
 

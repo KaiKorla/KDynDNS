@@ -101,10 +101,10 @@ pub async fn update(
 mod tests {
     use super::*;
     use actix_web::{App, test};
+    use argon2::password_hash::rand_core::OsRng;
+    use argon2::password_hash::SaltString;
     use argon2::PasswordHasher;
     use base64::prelude::*;
-    use password_hash::SaltString;
-    use rand::rngs::OsRng;
     use std::sync::{Arc, RwLock};
 
     use crate::AppState;
