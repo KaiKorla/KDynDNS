@@ -12,13 +12,40 @@ No new features.
 
 ### Changed
 
-- Replaced shell-based DNS updates with a direct `hickory-client` RFC 2136 + TSIG implementation.
+No changes yet.
+
+### Deprecated
+
+No deprecated features.
+
+### Removed
+
+No removed features.
+
+### Fixed
+
+No bug fixes.
+
+### Security
+
+No security-specific changes documented.
+
+---
+
+## [4.0.0] - 2026-04-08
+
+### Added
+
+No new features.
+
+### Changed
+
+- **Breaking:** Replaced shell-based DNS updates with a direct `hickory-client` RFC 2136 + TSIG implementation. Per-user `server` values must point to an authoritative RFC 2136 endpoint, and `tsig_key_path` must reference a local readable TSIG key file.
+- **Breaking:** DynDNS updates now modify only explicitly requested `A` and `AAAA` RRsets. Omitted address families remain unchanged, and non-address RR types are never touched.
+- **Breaking:** Configuration loading now validates password hashes, DNS server URIs, TSIG key files, and allowed hosts before applying startup or reload changes. Invalid configs are rejected earlier than before.
 - Internal DNS updater interface is now async; request handling awaits DNS updates directly.
-- TSIG credentials are now parsed from the local key file and passed to the RFC 2136 client.
 - RFC 2136 updates now discover the authoritative zone via SOA instead of guessing it from the last host labels.
 - DNS updates now send requested `A`/`AAAA` changes in a single RFC 2136 update transaction to avoid partial intermediate states.
-- DynDNS updates now replace only the explicitly requested `A` and `AAAA` RRsets; omitted address families and non-address RR types remain untouched.
-- Configuration loading now validates password hashes, DNS server URIs, TSIG key files and allowed hosts before applying startup or reload changes.
 - Updated examples/docs to match the new DNS server URI style (for example `udp://127.0.0.1:53`) and `DYNDNS_CONFIG`.
 - Password verification now runs on bounded blocking workers instead of directly on async request threads.
 
