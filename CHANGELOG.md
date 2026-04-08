@@ -48,6 +48,7 @@ No new features.
 - DNS updates now send requested `A`/`AAAA` changes in a single RFC 2136 update transaction to avoid partial intermediate states.
 - Updated examples/docs to match the new DNS server URI style (for example `udp://127.0.0.1:53`) and `DYNDNS_CONFIG`.
 - Password verification now runs on bounded blocking workers instead of directly on async request threads.
+- The release vendoring workflow now also runs `cargo clippy --all-targets --all-features -- -D warnings` and `cargo audit` alongside release builds and tests.
 
 ### Deprecated
 
