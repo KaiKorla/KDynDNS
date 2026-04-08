@@ -6,7 +6,7 @@ use tracing::{info, warn};
 
 use crate::AppState;
 use crate::auth::{parse_basic_auth, verify_user};
-use crate::dns::DnsError;
+use crate::dns::{DnsError, normalize_fqdn};
 use crate::security::{AuthRateLimiter, auth_failure_delay, auth_rate_limit_key, sanitize_for_log};
 
 #[derive(Deserialize)]
@@ -96,14 +96,18 @@ pub async fn update(
     };
     state.auth_limiter.reset_key(&limiter_key);
 
-    let host_norm = if query.host.ends_with('.') {
-        query.host.trim().to_string()
-    } else {
-        format!("{}.", query.host.trim())
+    let host_norm = match normalize_fqdn(&query.host) {
+        Ok(host) => host,
+        Err(DnsError::InvalidHost) => return HttpResponse::BadRequest().body("Invalid host"),
+        Err(DnsError::UpdateFailed(_)) => return HttpResponse::BadRequest().body("Invalid host"),
     };
     let safe_host = sanitize_for_log(&host_norm);
 
-    if !user.allowed_hosts.iter().any(|h| h == &host_norm) {
+    if !user.allowed_hosts.iter().any(|allowed_host| {
+        normalize_fqdn(allowed_host)
+            .map(|allowed| allowed == host_norm)
+            .unwrap_or(false)
+    }) {
         warn!(
             "User '{}' is not allowed to update host '{}'",
             safe_username, safe_host
@@ -261,10 +265,8 @@ mod tests {
 
     #[actix_web::test]
     async fn repeated_auth_failures_are_rate_limited() {
-        let state = build_test_state_with_limiter(
-            false,
-            AuthRateLimiter::new(Duration::from_secs(60), 100, 1),
-        );
+        let state =
+            build_test_state_with_limiter(false, AuthRateLimiter::new(Duration::from_secs(60), 1));
         let app =
             test::init_service(App::new().app_data(web::Data::new(state)).service(update)).await;
 
@@ -283,5 +285,21 @@ mod tests {
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), 429);
+    }
+
+    #[actix_web::test]
+    async fn update_accepts_case_insensitive_host_match() {
+        let state = build_test_state(false);
+        let app =
+            test::init_service(App::new().app_data(web::Data::new(state)).service(update)).await;
+
+        let token = BASE64_STANDARD.encode("user:secret");
+        let req = test::TestRequest::get()
+            .uri("/update?host=TEST.EXAMPLE.COM&ipv4=1.2.3.4")
+            .append_header(("Authorization", format!("basic {}", token)))
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 200);
     }
 }

@@ -12,12 +12,12 @@ const DUMMY_PASSWORD_HASH: &str = "$argon2id$v=19$m=65536,t=3,p=1$WnJ1TFZNZEQ0QT
 pub fn parse_basic_auth(req: &HttpRequest) -> Option<(String, String)> {
     let header = req.headers().get("Authorization")?;
     let header_str = header.to_str().ok()?;
+    let (scheme, b64) = header_str.split_once(' ')?;
 
-    if !header_str.starts_with("Basic ") {
+    if !scheme.eq_ignore_ascii_case("Basic") {
         return None;
     }
 
-    let b64 = &header_str[6..];
     let decoded = BASE64_STANDARD.decode(b64).ok();
     let decoded_str = String::from_utf8(decoded?).ok()?;
 
@@ -117,5 +117,17 @@ mod tests {
         let (u, p) = res.unwrap();
         assert_eq!(u, "test");
         assert_eq!(p, "secret");
+    }
+
+    #[test]
+    fn parse_basic_auth_is_case_insensitive_for_scheme() {
+        let encoded = BASE64_STANDARD.encode("test:secret");
+
+        let req = TestRequest::get()
+            .insert_header(("Authorization", format!("basic {}", encoded)))
+            .to_http_request();
+
+        let res = parse_basic_auth(&req);
+        assert!(res.is_some());
     }
 }

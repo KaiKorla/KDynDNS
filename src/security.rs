@@ -4,17 +4,14 @@ use std::time::{Duration, Instant};
 
 const MAX_LOG_VALUE_CHARS: usize = 128;
 const AUTH_WINDOW_SECS: u64 = 60;
-const MAX_GLOBAL_FAILURES_PER_WINDOW: usize = 30;
 const MAX_KEY_FAILURES_PER_WINDOW: usize = 8;
 
 struct AuthRateLimiterState {
-    global_failures: VecDeque<Instant>,
     keyed_failures: HashMap<String, VecDeque<Instant>>,
 }
 
 pub struct AuthRateLimiter {
     window: Duration,
-    max_global_failures: usize,
     max_key_failures: usize,
     state: Mutex<AuthRateLimiterState>,
 }
@@ -23,20 +20,17 @@ impl Default for AuthRateLimiter {
     fn default() -> Self {
         Self::new(
             Duration::from_secs(AUTH_WINDOW_SECS),
-            MAX_GLOBAL_FAILURES_PER_WINDOW,
             MAX_KEY_FAILURES_PER_WINDOW,
         )
     }
 }
 
 impl AuthRateLimiter {
-    pub fn new(window: Duration, max_global_failures: usize, max_key_failures: usize) -> Self {
+    pub fn new(window: Duration, max_key_failures: usize) -> Self {
         Self {
             window,
-            max_global_failures,
             max_key_failures,
             state: Mutex::new(AuthRateLimiterState {
-                global_failures: VecDeque::new(),
                 keyed_failures: HashMap::new(),
             }),
         }
@@ -44,11 +38,6 @@ impl AuthRateLimiter {
 
     pub fn allow_attempt(&self, key: &str) -> bool {
         let mut state = self.state.lock().unwrap();
-        prune_old(&mut state.global_failures, self.window);
-
-        if state.global_failures.len() >= self.max_global_failures {
-            return false;
-        }
 
         if let Some(keyed) = state.keyed_failures.get_mut(key) {
             prune_old(keyed, self.window);
@@ -66,9 +55,6 @@ impl AuthRateLimiter {
     pub fn record_failure(&self, key: &str) {
         let mut state = self.state.lock().unwrap();
         let now = Instant::now();
-
-        prune_old(&mut state.global_failures, self.window);
-        state.global_failures.push_back(now);
 
         let keyed = state.keyed_failures.entry(key.to_string()).or_default();
         prune_old(keyed, self.window);
@@ -135,7 +121,7 @@ mod tests {
 
     #[test]
     fn limiter_blocks_after_key_threshold() {
-        let limiter = AuthRateLimiter::new(Duration::from_secs(60), 100, 2);
+        let limiter = AuthRateLimiter::new(Duration::from_secs(60), 2);
         assert!(limiter.allow_attempt("user:test"));
         limiter.record_failure("user:test");
         assert!(limiter.allow_attempt("user:test"));
@@ -144,12 +130,11 @@ mod tests {
     }
 
     #[test]
-    fn limiter_blocks_after_global_threshold() {
-        let limiter = AuthRateLimiter::new(Duration::from_secs(60), 2, 100);
+    fn limiter_is_scoped_to_each_key() {
+        let limiter = AuthRateLimiter::new(Duration::from_secs(60), 1);
         limiter.record_failure("user:a");
+        assert!(!limiter.allow_attempt("user:a"));
         assert!(limiter.allow_attempt("user:b"));
-        limiter.record_failure("user:b");
-        assert!(!limiter.allow_attempt("user:c"));
     }
 
     #[test]

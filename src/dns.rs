@@ -5,7 +5,7 @@ use hickory_client::op::ResponseCode;
 use hickory_client::proto::rr::dnssec::tsig::TSigner;
 use hickory_client::rr::rdata::tsig::TsigAlgorithm as HickoryTsigAlgorithm;
 use hickory_client::rr::rdata::{A, AAAA};
-use hickory_client::rr::{Name, RData, Record, RecordSet, RecordType};
+use hickory_client::rr::{DNSClass, Name, RData, Record, RecordSet, RecordType};
 use hickory_client::tcp::TcpClientConnection;
 use hickory_client::udp::UdpClientConnection;
 use std::fs;
@@ -36,27 +36,32 @@ pub trait DnsUpdater: Send + Sync {
     ) -> Result<(), DnsError>;
 }
 
-/// myhost.domain.tld → zone = domain.tld. , fqdn = myhost.domain.tld.
-pub fn derive_zone_and_fqdn(host: &str) -> Result<(String, String), DnsError> {
-    let fqdn = if host.ends_with('.') {
-        host.to_string()
-    } else {
-        format!("{}.", host)
-    };
+pub fn normalize_fqdn(host: &str) -> Result<String, DnsError> {
+    let trimmed = host.trim();
+    let without_root = trimmed.trim_end_matches('.');
 
-    let parts: Vec<&str> = fqdn.trim_end_matches('.').split('.').collect();
-
-    if parts.len() < 2 {
+    if without_root.is_empty() {
         return Err(DnsError::InvalidHost);
     }
 
-    let zone = if parts.len() >= 3 {
-        format!("{}.{}.", parts[parts.len() - 2], parts[parts.len() - 1])
-    } else {
-        format!("{}.{}.", parts[0], parts[1])
-    };
+    let labels: Vec<&str> = without_root.split('.').collect();
+    if labels.len() < 2 || labels.iter().any(|label| label.is_empty()) {
+        return Err(DnsError::InvalidHost);
+    }
 
-    Ok((zone, fqdn))
+    let fqdn = format!("{}.", without_root.to_ascii_lowercase());
+    Name::from_str_relaxed(&fqdn).map_err(|_| DnsError::InvalidHost)?;
+
+    Ok(fqdn)
+}
+
+fn zone_candidates(fqdn: &str) -> Result<Vec<String>, DnsError> {
+    let normalized = normalize_fqdn(fqdn)?;
+    let labels: Vec<&str> = normalized.trim_end_matches('.').split('.').collect();
+
+    Ok((0..labels.len() - 1)
+        .map(|start| format!("{}.", labels[start..].join(".")))
+        .collect())
 }
 
 pub struct Rfc2136DnsUpdater;
@@ -75,16 +80,9 @@ enum DnsServerAddress {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ParsedTsigAlgorithm {
-    HmacMd5,
-    Gss,
-    HmacSha1,
-    HmacSha224,
     HmacSha256,
-    HmacSha256_128,
     HmacSha384,
-    HmacSha384_192,
     HmacSha512,
-    HmacSha512_256,
 }
 
 fn extract_quoted_value(line: &str) -> Option<String> {
@@ -98,16 +96,9 @@ fn parse_tsig_algorithm(raw: &str) -> Option<ParsedTsigAlgorithm> {
     let normalized = normalized.to_ascii_lowercase();
 
     match normalized.as_str() {
-        "hmac-md5" => Some(ParsedTsigAlgorithm::HmacMd5),
-        "gss-tsig" | "gss" => Some(ParsedTsigAlgorithm::Gss),
-        "hmac-sha1" => Some(ParsedTsigAlgorithm::HmacSha1),
-        "hmac-sha224" => Some(ParsedTsigAlgorithm::HmacSha224),
         "hmac-sha256" => Some(ParsedTsigAlgorithm::HmacSha256),
-        "hmac-sha256-128" => Some(ParsedTsigAlgorithm::HmacSha256_128),
         "hmac-sha384" => Some(ParsedTsigAlgorithm::HmacSha384),
-        "hmac-sha384-192" => Some(ParsedTsigAlgorithm::HmacSha384_192),
         "hmac-sha512" => Some(ParsedTsigAlgorithm::HmacSha512),
-        "hmac-sha512-256" => Some(ParsedTsigAlgorithm::HmacSha512_256),
         _ => None,
     }
 }
@@ -205,16 +196,9 @@ fn parse_dns_server_address(server: &str) -> Result<DnsServerAddress, DnsError> 
 
 fn to_hickory_tsig_algorithm(algorithm: ParsedTsigAlgorithm) -> HickoryTsigAlgorithm {
     match algorithm {
-        ParsedTsigAlgorithm::HmacMd5 => HickoryTsigAlgorithm::HmacMd5,
-        ParsedTsigAlgorithm::Gss => HickoryTsigAlgorithm::Gss,
-        ParsedTsigAlgorithm::HmacSha1 => HickoryTsigAlgorithm::HmacSha1,
-        ParsedTsigAlgorithm::HmacSha224 => HickoryTsigAlgorithm::HmacSha224,
         ParsedTsigAlgorithm::HmacSha256 => HickoryTsigAlgorithm::HmacSha256,
-        ParsedTsigAlgorithm::HmacSha256_128 => HickoryTsigAlgorithm::HmacSha256_128,
         ParsedTsigAlgorithm::HmacSha384 => HickoryTsigAlgorithm::HmacSha384,
-        ParsedTsigAlgorithm::HmacSha384_192 => HickoryTsigAlgorithm::HmacSha384_192,
         ParsedTsigAlgorithm::HmacSha512 => HickoryTsigAlgorithm::HmacSha512,
-        ParsedTsigAlgorithm::HmacSha512_256 => HickoryTsigAlgorithm::HmacSha512_256,
     }
 }
 
@@ -266,26 +250,63 @@ fn check_update_response(response_code: ResponseCode) -> Result<(), DnsError> {
     }
 }
 
-async fn delete_address_rrsets(
+fn parse_name(value: &str) -> Result<Name, DnsError> {
+    Name::from_str_relaxed(value).map_err(|e| DnsError::UpdateFailed(e.to_string()))
+}
+
+async fn discover_authoritative_zone(
+    client: &mut AsyncClient,
+    fqdn: &str,
+) -> Result<String, DnsError> {
+    for candidate in zone_candidates(fqdn)? {
+        let response = client
+            .query(parse_name(&candidate)?, DNSClass::IN, RecordType::SOA)
+            .await
+            .map_err(|e| DnsError::UpdateFailed(e.to_string()))?;
+
+        if response.response_code() == ResponseCode::NoError
+            && response
+                .answers()
+                .iter()
+                .any(|answer| answer.record_type() == RecordType::SOA)
+        {
+            return Ok(candidate);
+        }
+
+        if matches!(
+            response.response_code(),
+            ResponseCode::NoError | ResponseCode::NXDomain
+        ) {
+            if let Some(soa) = response.soa() {
+                let zone = normalize_fqdn(&soa.name().to_utf8())?;
+                if fqdn.ends_with(&zone) {
+                    return Ok(zone);
+                }
+            }
+        }
+    }
+
+    Err(DnsError::UpdateFailed(format!(
+        "Could not determine authoritative zone for {}",
+        fqdn
+    )))
+}
+
+async fn delete_rrset(
     client: &mut AsyncClient,
     fqdn: &str,
     zone: &str,
+    record_type: RecordType,
 ) -> Result<(), DnsError> {
-    let fqdn_name =
-        Name::from_str_relaxed(fqdn).map_err(|e| DnsError::UpdateFailed(e.to_string()))?;
-    let zone_name =
-        Name::from_str_relaxed(zone).map_err(|e| DnsError::UpdateFailed(e.to_string()))?;
+    let fqdn_name = parse_name(fqdn)?;
+    let zone_name = parse_name(zone)?;
 
-    for record_type in [RecordType::A, RecordType::AAAA] {
-        let delete_record = Record::with(fqdn_name.clone(), record_type, 0);
-        let response = client
-            .delete_rrset(delete_record, zone_name.clone())
-            .await
-            .map_err(|e| DnsError::UpdateFailed(e.to_string()))?;
-        check_update_response(response.response_code())?;
-    }
-
-    Ok(())
+    let delete_record = Record::with(fqdn_name, record_type, 0);
+    let response = client
+        .delete_rrset(delete_record, zone_name)
+        .await
+        .map_err(|e| DnsError::UpdateFailed(e.to_string()))?;
+    check_update_response(response.response_code())
 }
 
 async fn append_ipv4_rrset(
@@ -295,10 +316,8 @@ async fn append_ipv4_rrset(
     ttl: u32,
     ip: Ipv4Addr,
 ) -> Result<(), DnsError> {
-    let fqdn_name =
-        Name::from_str_relaxed(fqdn).map_err(|e| DnsError::UpdateFailed(e.to_string()))?;
-    let zone_name =
-        Name::from_str_relaxed(zone).map_err(|e| DnsError::UpdateFailed(e.to_string()))?;
+    let fqdn_name = parse_name(fqdn)?;
+    let zone_name = parse_name(zone)?;
     let mut rrset = RecordSet::with_ttl(fqdn_name, RecordType::A, ttl);
     rrset.add_rdata(RData::A(A::from(ip)));
 
@@ -316,10 +335,8 @@ async fn append_ipv6_rrset(
     ttl: u32,
     ip: Ipv6Addr,
 ) -> Result<(), DnsError> {
-    let fqdn_name =
-        Name::from_str_relaxed(fqdn).map_err(|e| DnsError::UpdateFailed(e.to_string()))?;
-    let zone_name =
-        Name::from_str_relaxed(zone).map_err(|e| DnsError::UpdateFailed(e.to_string()))?;
+    let fqdn_name = parse_name(fqdn)?;
+    let zone_name = parse_name(zone)?;
     let mut rrset = RecordSet::with_ttl(fqdn_name, RecordType::AAAA, ttl);
     rrset.add_rdata(RData::AAAA(AAAA::from(ip)));
 
@@ -339,25 +356,26 @@ impl DnsUpdater for Rfc2136DnsUpdater {
         ipv4: Option<Ipv4Addr>,
         ipv6: Option<Ipv6Addr>,
     ) -> Result<(), DnsError> {
-        let (zone, fqdn) = derive_zone_and_fqdn(host)?;
+        let fqdn = normalize_fqdn(host)?;
         let ttl = 60;
         let (key_name, key_secret, tsig_algorithm) = parse_tsig_key_file(&user.tsig_key_path)?;
+
+        let mut client =
+            connect_rfc2136_client(&user.server, &key_name, &key_secret, tsig_algorithm).await?;
+        let zone = discover_authoritative_zone(&mut client, &fqdn).await?;
 
         info!(
             "DNS update via hickory-client (RFC2136): user={}, zone={}, fqdn={}, ipv4={:?}, ipv6={:?}",
             user.username, zone, fqdn, ipv4, ipv6
         );
 
-        let mut client =
-            connect_rfc2136_client(&user.server, &key_name, &key_secret, tsig_algorithm).await?;
-
-        delete_address_rrsets(&mut client, &fqdn, &zone).await?;
-
         if let Some(ip) = ipv4 {
+            delete_rrset(&mut client, &fqdn, &zone, RecordType::A).await?;
             append_ipv4_rrset(&mut client, &fqdn, &zone, ttl, ip).await?;
         }
 
         if let Some(ip) = ipv6 {
+            delete_rrset(&mut client, &fqdn, &zone, RecordType::AAAA).await?;
             append_ipv6_rrset(&mut client, &fqdn, &zone, ttl, ip).await?;
         }
 
@@ -408,35 +426,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn derive_zone_three_parts() {
-        let (zone, fqdn) = derive_zone_and_fqdn("myhost.domain.tld").unwrap();
-        assert_eq!(zone, "domain.tld.");
+    fn normalize_fqdn_lowercases_and_adds_root_label() {
+        let fqdn = normalize_fqdn("MyHost.Domain.Tld").unwrap();
         assert_eq!(fqdn, "myhost.domain.tld.");
     }
 
     #[test]
-    fn derive_zone_trailing_dot() {
-        let (zone, fqdn) = derive_zone_and_fqdn("myhost.domain.tld.").unwrap();
-        assert_eq!(zone, "domain.tld.");
-        assert_eq!(fqdn, "myhost.domain.tld.");
+    fn zone_candidates_include_more_specific_suffixes() {
+        let candidates = zone_candidates("host.dyn.example.com.").unwrap();
+        assert_eq!(
+            candidates,
+            vec![
+                "host.dyn.example.com.".to_string(),
+                "dyn.example.com.".to_string(),
+                "example.com.".to_string()
+            ]
+        );
     }
 
     #[test]
-    fn derive_zone_two_parts() {
-        let (zone, fqdn) = derive_zone_and_fqdn("example.com").unwrap();
-        assert_eq!(zone, "example.com.");
-        assert_eq!(fqdn, "example.com.");
+    fn zone_candidates_for_zone_apex_return_single_candidate() {
+        let candidates = zone_candidates("example.com").unwrap();
+        assert_eq!(candidates, vec!["example.com.".to_string()]);
     }
 
     #[test]
     fn invalid_host_too_short() {
-        let res = derive_zone_and_fqdn("invalid");
+        let res = normalize_fqdn("invalid");
         assert!(matches!(res, Err(DnsError::InvalidHost)));
     }
 
     #[test]
     fn invalid_host_empty() {
-        let res = derive_zone_and_fqdn("");
+        let res = normalize_fqdn("");
+        assert!(matches!(res, Err(DnsError::InvalidHost)));
+    }
+
+    #[test]
+    fn invalid_host_with_empty_label() {
+        let res = normalize_fqdn("host..example.com");
         assert!(matches!(res, Err(DnsError::InvalidHost)));
     }
 
@@ -475,6 +503,19 @@ key "dyn-key" {
         let content = r#"
 key "dyn-key" {
     algorithm unsupported-algorithm;
+    secret "dGVzdA==";
+};
+"#;
+
+        let res = parse_tsig_key(content);
+        assert!(matches!(res, Err(DnsError::UpdateFailed(_))));
+    }
+
+    #[test]
+    fn parse_tsig_key_rejects_unsupported_but_known_algorithms() {
+        let content = r#"
+key "dyn-key" {
+    algorithm hmac-sha1;
     secret "dGVzdA==";
 };
 "#;

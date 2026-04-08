@@ -9,14 +9,14 @@ A minimalistic DynDNS service written in Rust.
 - simple and plain TOML configuration file (see below)
 - HTTP basic auth and Argon2id hashing of the credentials
 - authentication throttling and bounded password-verification concurrency
-- IPv4 and IPv6 support including removing of existing entries
+- IPv4 and IPv6 DynDNS updates for `A` and `AAAA` only; other RR types stay untouched
 - RFC 2136 updates via `hickory-client` (TSIG), no external `nsupdate` binary required
 - SIGUSR1 support for runtime configuration reloading
 
 ## Development
 
 - Rust: <https://rust-lang.org>
-  - Dependencies are vendored for offline reproduceable builds.“
+  - Dependencies are vendored for offline reproducible builds.
 - Conventions:
   - Versioning: <https://semver.org>
   - Changelog: <https://keepachangelog.com>
@@ -41,7 +41,9 @@ password_hash = "$argon2id$v=19$m=65536,t=3,p=1$..."
 allowed_hosts = ["myhost.example.com."]
 ```
 
-`tsig_key_path` must point to a local TSIG key file readable by the service, for example:
+`server` must point to an authoritative DNS server that accepts RFC 2136 updates for the configured host. KDynDNS discovers the matching zone via SOA before sending the update.
+
+`tsig_key_path` must point to a local TSIG key file readable by the service. Supported TSIG algorithms follow the active Hickory backend and currently are `hmac-sha256`, `hmac-sha384`, and `hmac-sha512`, for example:
 
 ```txt
 key "dyn-key" {
@@ -95,11 +97,12 @@ cargo run --release
 - Authentication: HTTP Basic Auth; users and allowed hosts come from `config.toml`.
 - Health check: `GET /health` returns `200 OK` and body `OK` without authentication.
 - Update endpoint: `GET /update` with Basic Auth. Query parameters:
-  - `host` (required) — trailing dot optional; normalized to a fully qualified name with trailing dot and must be listed in `allowed_hosts` for the authenticated user.
-  - `ipv4` (optional) — IPv4 literal; empty or invalid values rejected.
-  - `ipv6` (optional) — IPv6 literal; empty or invalid values rejected.
+  - `host` (required) — trailing dot optional; normalized to a lowercase fully qualified name with trailing dot and must be listed in `allowed_hosts` for the authenticated user.
+  - `ipv4` (optional) — IPv4 literal; when present, the host's `A` RRset is replaced with this address.
+  - `ipv6` (optional) — IPv6 literal; when present, the host's `AAAA` RRset is replaced with this address.
   - At least one of `ipv4` or `ipv6` must be present and valid.
-- Responses: `200 OK` on success; `400` for missing/invalid params; `401` for missing/invalid credentials (with `WWW-Authenticate`); `403` if the host is not allowed; `429` when authentication attempts are throttled; `500` if the DNS update fails.
+  - Omitted address families are left unchanged. KDynDNS never modifies RR types other than `A` and `AAAA`.
+- Responses: `200 OK` on success; `400` for missing/invalid params; `401` for missing/invalid credentials (with `WWW-Authenticate`); `403` if the host is not allowed; `429` when authentication attempts for the same requester key are throttled; `500` if the DNS update fails.
 - Example using curl on the unix socket:
 
     ```bash
