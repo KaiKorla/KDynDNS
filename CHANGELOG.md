@@ -12,7 +12,10 @@ No new features.
 
 ### Changed
 
-No changes yet.
+- Replaced shell-based DNS updates with the `dns-update` crate (RFC 2136 + TSIG).
+- Internal DNS updater interface is now async; request handling awaits DNS updates directly.
+- TSIG credentials are now parsed from the local key file and passed to the RFC 2136 client.
+- Updated examples/docs to match the new DNS server URI style (for example `udp://127.0.0.1:53`) and `DYNDNS_CONFIG`.
 
 ### Deprecated
 
@@ -20,7 +23,7 @@ No deprecated features.
 
 ### Removed
 
-No removed features.
+- Removed dependency on the external `nsupdate` binary for DNS updates.
 
 ### Fixed
 

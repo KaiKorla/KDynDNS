@@ -11,7 +11,7 @@ mod dns;
 mod handlers;
 
 use crate::config::AppConfig;
-use crate::dns::{DnsUpdater, NsupdateDnsUpdater};
+use crate::dns::{DnsUpdater, Rfc2136DnsUpdater};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -33,7 +33,7 @@ async fn main() -> std::io::Result<()> {
     let cfg = AppConfig::from_file(&config_path).expect("Loading configuration failed");
 
     let config_arc = Arc::new(RwLock::new(cfg));
-    let updater: Arc<dyn DnsUpdater> = Arc::new(NsupdateDnsUpdater::new());
+    let updater: Arc<dyn DnsUpdater> = Arc::new(Rfc2136DnsUpdater::new());
 
     let state = AppState {
         config: Arc::clone(&config_arc),

@@ -87,7 +87,11 @@ pub async fn update(
         username, host_norm, ipv4, ipv6
     );
 
-    match state.updater.update_records(user, &host_norm, ipv4, ipv6) {
+    match state
+        .updater
+        .update_records(user, &host_norm, ipv4, ipv6)
+        .await
+    {
         Ok(()) => HttpResponse::Ok().body("OK"),
         Err(DnsError::InvalidHost) => HttpResponse::BadRequest().body("Invalid host"),
         Err(DnsError::UpdateFailed(e)) => {
@@ -101,9 +105,9 @@ pub async fn update(
 mod tests {
     use super::*;
     use actix_web::{App, test};
-    use argon2::password_hash::rand_core::OsRng;
-    use argon2::password_hash::SaltString;
     use argon2::PasswordHasher;
+    use argon2::password_hash::SaltString;
+    use argon2::password_hash::rand_core::OsRng;
     use base64::prelude::*;
     use std::sync::{Arc, RwLock};
 

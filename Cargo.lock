@@ -1081,6 +1081,7 @@ version = "3.0.1"
 dependencies = [
  "actix-web",
  "argon2",
+ "async-trait",
  "base64 0.22.1",
  "dns-update",
  "listenfd",

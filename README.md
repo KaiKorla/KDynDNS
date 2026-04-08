@@ -9,6 +9,7 @@ A minimalistic DynDNS service written in Rust.
 - simple and plain TOML configuration file (see below)
 - HTTP basic auth and Argon2id hashing of the credentials
 - IPv4 and IPv6 support including removing of existing entries
+- RFC 2136 updates via `dns-update` crate (TSIG), no external `nsupdate` binary required
 - SIGUSR1 support for runtime configuration reloading
 
 ## Development
@@ -32,11 +33,20 @@ Edit /etc/kdyndns/config.toml
 
 ```toml
 [[users]]
-server = "127.0.0.1"
+server = "udp://127.0.0.1:53"
 tsig_key_path = "/etc/bind/keys/dyn.key"
 username = "user1"
 password_hash = "$argon2id$v=19$m=65536,t=3,p=1$..."
 allowed_hosts = ["myhost.example.com."]
+```
+
+`tsig_key_path` must point to a local TSIG key file readable by the service, for example:
+
+```txt
+key "dyn-key" {
+    algorithm hmac-sha256;
+    secret "BASE64_SECRET_HERE";
+};
 ```
 
 Create the password hash:
@@ -73,8 +83,10 @@ Create the password hash:
 
 ### From source
 
-export KDynDNS=/etc/kdyndns/config.toml
+```bash
+export DYNDNS_CONFIG=/etc/kdyndns/config.toml
 cargo run --release
+```
 
 ## HTTP API
 
