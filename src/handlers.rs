@@ -1,13 +1,13 @@
 use actix_web::{HttpRequest, HttpResponse, Responder, get, web};
 use serde::Deserialize;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::AppState;
 use crate::auth::{parse_basic_auth, verify_user};
 use crate::dns::{DnsError, normalize_fqdn};
-use crate::security::{AuthRateLimiter, auth_failure_delay, auth_rate_limit_key, sanitize_for_log};
+use crate::security::{auth_failure_delay, auth_rate_limit_key, sanitize_for_log};
 
 #[derive(Deserialize)]
 pub struct UpdateQuery {
@@ -21,13 +21,37 @@ pub async fn health() -> impl Responder {
     HttpResponse::Ok().body("OK")
 }
 
+fn forwarded_client_ip(req: &HttpRequest) -> Option<String> {
+    req.headers()
+        .get("X-Forwarded-For")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<IpAddr>().ok())
+        .map(|ip| ip.to_string())
+        .or_else(|| {
+            req.headers()
+                .get("X-Real-IP")
+                .and_then(|value| value.to_str().ok())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .and_then(|value| value.parse::<IpAddr>().ok())
+                .map(|ip| ip.to_string())
+        })
+}
+
+fn request_client_ip(req: &HttpRequest) -> Option<String> {
+    forwarded_client_ip(req).or_else(|| req.peer_addr().map(|addr| addr.ip().to_string()))
+}
+
 #[get("/update")]
 pub async fn update(
     req: HttpRequest,
     query: web::Query<UpdateQuery>,
     state: web::Data<AppState>,
 ) -> impl Responder {
-    let peer = req.peer_addr().map(|addr| addr.ip().to_string());
+    let peer = request_client_ip(&req);
     let credentials = parse_basic_auth(&req);
     let limiter_key = auth_rate_limit_key(
         peer.as_deref(),
@@ -103,11 +127,11 @@ pub async fn update(
     };
     let safe_host = sanitize_for_log(&host_norm);
 
-    if !user.allowed_hosts.iter().any(|allowed_host| {
-        normalize_fqdn(allowed_host)
-            .map(|allowed| allowed == host_norm)
-            .unwrap_or(false)
-    }) {
+    if !user
+        .allowed_hosts
+        .iter()
+        .any(|allowed_host| allowed_host == &host_norm)
+    {
         warn!(
             "User '{}' is not allowed to update host '{}'",
             safe_username, safe_host
@@ -173,7 +197,7 @@ mod tests {
     use crate::AppState;
     use crate::config::{AppConfig, UserConfig};
     use crate::dns::MockDnsUpdater;
-    use crate::security::default_auth_concurrency_limit;
+    use crate::security::{AuthRateLimiter, default_auth_concurrency_limit};
 
     fn build_test_state(should_fail: bool) -> AppState {
         build_test_state_with_limiter(should_fail, AuthRateLimiter::default())
@@ -301,5 +325,15 @@ mod tests {
 
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), 200);
+    }
+
+    #[actix_web::test]
+    async fn forwarded_client_ip_prefers_x_forwarded_for() {
+        let req = test::TestRequest::default()
+            .insert_header(("X-Forwarded-For", "203.0.113.10, 127.0.0.1"))
+            .insert_header(("X-Real-IP", "198.51.100.10"))
+            .to_http_request();
+
+        assert_eq!(request_client_ip(&req).as_deref(), Some("203.0.113.10"));
     }
 }

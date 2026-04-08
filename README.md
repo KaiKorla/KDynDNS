@@ -11,6 +11,7 @@ A minimalistic DynDNS service written in Rust.
 - authentication throttling and bounded password-verification concurrency
 - IPv4 and IPv6 DynDNS updates for `A` and `AAAA` only; other RR types stay untouched
 - RFC 2136 updates via `hickory-client` (TSIG), no external `nsupdate` binary required
+- configuration is validated semantically on startup and `SIGUSR1` reload before it becomes active
 - SIGUSR1 support for runtime configuration reloading
 
 ## Development
@@ -94,6 +95,7 @@ cargo run --release
 ## HTTP API
 
 - Transport: HTTP over the unix socket provided by systemd or bound at `/run/kdyndns/kdyndns.sock`; typically fronted by nginx.
+- Reverse proxy note: for per-client auth throttling behind nginx, forward the client IP via `X-Forwarded-For` or `X-Real-IP`.
 - Authentication: HTTP Basic Auth; users and allowed hosts come from `config.toml`.
 - Health check: `GET /health` returns `200 OK` and body `OK` without authentication.
 - Update endpoint: `GET /update` with Basic Auth. Query parameters:

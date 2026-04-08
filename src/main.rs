@@ -60,7 +60,7 @@ async fn main() -> std::io::Result<()> {
             match AppConfig::from_file(&config_path_clone) {
                 Ok(new_cfg) => {
                     *reload_state.config.write().unwrap() = new_cfg;
-                    info!("Reloading configuration successfull");
+                    info!("Reloading configuration successful");
                 }
                 Err(e) => {
                     error!("Reloading configuration failed: {}", e);

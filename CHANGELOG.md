@@ -16,7 +16,9 @@ No new features.
 - Internal DNS updater interface is now async; request handling awaits DNS updates directly.
 - TSIG credentials are now parsed from the local key file and passed to the RFC 2136 client.
 - RFC 2136 updates now discover the authoritative zone via SOA instead of guessing it from the last host labels.
+- DNS updates now send requested `A`/`AAAA` changes in a single RFC 2136 update transaction to avoid partial intermediate states.
 - DynDNS updates now replace only the explicitly requested `A` and `AAAA` RRsets; omitted address families and non-address RR types remain untouched.
+- Configuration loading now validates password hashes, DNS server URIs, TSIG key files and allowed hosts before applying startup or reload changes.
 - Updated examples/docs to match the new DNS server URI style (for example `udp://127.0.0.1:53`) and `DYNDNS_CONFIG`.
 - Password verification now runs on bounded blocking workers instead of directly on async request threads.
 
@@ -35,6 +37,7 @@ No deprecated features.
 - Fixed host normalization and allow-list checks to treat FQDNs case-insensitively.
 - Fixed HTTP Basic Auth parsing to accept case-insensitive auth schemes.
 - Fixed TSIG algorithm validation to reject algorithms not supported by the active Hickory backend.
+- Fixed auth throttling behind reverse proxies by honoring `X-Forwarded-For` / `X-Real-IP` before falling back to the local peer address.
 - Fixed username enumeration via auth timing differences by verifying unknown users against a dummy Argon2 hash.
 - Fixed config read locks being held across awaited DNS updates.
 
@@ -42,6 +45,7 @@ No deprecated features.
 
 - Added in-memory authentication throttling and bounded verification concurrency to reduce brute-force and CPU exhaustion risk.
 - Authentication throttling is now scoped per requester key instead of allowing one noisy client to trigger a service-wide lockout.
+- Added explicit DNS operation timeouts so slow or hanging upstream DNS servers do not stall update requests indefinitely.
 - Sanitized attacker-controlled values before writing them to logs.
 - `cargo audit` passes after removing the transitive `rustls-pemfile` warning from the active dependency path.
 

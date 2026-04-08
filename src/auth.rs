@@ -57,6 +57,12 @@ pub fn verify_user(cfg: &AppConfig, username: &str, password: &str) -> Option<Us
     }
 }
 
+pub(crate) fn validate_password_hash(password_hash: &str) -> Result<(), String> {
+    PasswordHash::new(password_hash)
+        .map(|_| ())
+        .map_err(|e| format!("Invalid password hash: {}", e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
