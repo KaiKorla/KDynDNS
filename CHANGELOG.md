@@ -12,10 +12,11 @@ No new features.
 
 ### Changed
 
-- Replaced shell-based DNS updates with the `dns-update` crate (RFC 2136 + TSIG).
+- Replaced shell-based DNS updates with a direct `hickory-client` RFC 2136 + TSIG implementation.
 - Internal DNS updater interface is now async; request handling awaits DNS updates directly.
 - TSIG credentials are now parsed from the local key file and passed to the RFC 2136 client.
 - Updated examples/docs to match the new DNS server URI style (for example `udp://127.0.0.1:53`) and `DYNDNS_CONFIG`.
+- Password verification now runs on bounded blocking workers instead of directly on async request threads.
 
 ### Deprecated
 
@@ -28,10 +29,15 @@ No deprecated features.
 ### Fixed
 
 - Fixed compile errors after dependency updates by switching password-hash and RNG imports to the `argon2` re-exported paths used by current crate versions.
+- Fixed RFC 2136 updates deleting unrelated RRsets at the same owner name by deleting only `A` and `AAAA`.
+- Fixed username enumeration via auth timing differences by verifying unknown users against a dummy Argon2 hash.
+- Fixed config read locks being held across awaited DNS updates.
 
 ### Security
 
-No security updates.
+- Added in-memory authentication throttling and bounded verification concurrency to reduce brute-force and CPU exhaustion risk.
+- Sanitized attacker-controlled values before writing them to logs.
+- `cargo audit` passes after removing the transitive `rustls-pemfile` warning from the active dependency path.
 
 ---
 

@@ -3,20 +3,25 @@ use listenfd::ListenFd;
 use std::env;
 use std::sync::{Arc, RwLock};
 use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::Semaphore;
 use tracing::{error, info};
 
 mod auth;
 mod config;
 mod dns;
 mod handlers;
+mod security;
 
 use crate::config::AppConfig;
 use crate::dns::{DnsUpdater, Rfc2136DnsUpdater};
+use crate::security::{AuthRateLimiter, default_auth_concurrency_limit};
 
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<RwLock<AppConfig>>,
     pub updater: Arc<dyn DnsUpdater>,
+    pub auth_limiter: Arc<AuthRateLimiter>,
+    pub auth_slots: Arc<Semaphore>,
 }
 
 #[actix_web::main]
@@ -34,10 +39,14 @@ async fn main() -> std::io::Result<()> {
 
     let config_arc = Arc::new(RwLock::new(cfg));
     let updater: Arc<dyn DnsUpdater> = Arc::new(Rfc2136DnsUpdater::new());
+    let auth_limiter = Arc::new(AuthRateLimiter::default());
+    let auth_slots = Arc::new(Semaphore::new(default_auth_concurrency_limit()));
 
     let state = AppState {
         config: Arc::clone(&config_arc),
         updater: updater.clone(),
+        auth_limiter,
+        auth_slots,
     };
 
     let reload_state = state.clone();

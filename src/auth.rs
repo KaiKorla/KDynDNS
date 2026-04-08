@@ -5,6 +5,9 @@ use base64::prelude::*;
 use tracing::warn;
 
 use crate::config::{AppConfig, UserConfig};
+use crate::security::sanitize_for_log;
+
+const DUMMY_PASSWORD_HASH: &str = "$argon2id$v=19$m=65536,t=3,p=1$WnJ1TFZNZEQ0QTR2ZTBJWmU1U3VRZz09$xUlVAT+VaNcyoUWHkG7kByZSepDKwJnzFScqJUmYlg8";
 
 pub fn parse_basic_auth(req: &HttpRequest) -> Option<(String, String)> {
     let header = req.headers().get("Authorization")?;
@@ -25,17 +28,21 @@ pub fn parse_basic_auth(req: &HttpRequest) -> Option<(String, String)> {
     Some((user, pass))
 }
 
-pub fn verify_user<'a>(
-    cfg: &'a AppConfig,
-    username: &str,
-    password: &str,
-) -> Option<&'a UserConfig> {
-    let user = cfg.find_user(username)?;
+pub fn verify_user(cfg: &AppConfig, username: &str, password: &str) -> Option<UserConfig> {
+    let user = cfg.find_user(username).cloned();
+    let password_hash = user
+        .as_ref()
+        .map(|user| user.password_hash.as_str())
+        .unwrap_or(DUMMY_PASSWORD_HASH);
 
-    let parsed_hash = match PasswordHash::new(&user.password_hash) {
+    let parsed_hash = match PasswordHash::new(password_hash) {
         Ok(h) => h,
         Err(e) => {
-            warn!("Error while parsing the password for {}: {}", username, e);
+            warn!(
+                "Error while parsing the password for {}: {}",
+                sanitize_for_log(username),
+                e
+            );
             return None;
         }
     };
@@ -44,7 +51,7 @@ pub fn verify_user<'a>(
         .verify_password(password.as_bytes(), &parsed_hash)
         .is_ok()
     {
-        Some(user)
+        user
     } else {
         None
     }

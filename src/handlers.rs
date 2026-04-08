@@ -1,11 +1,13 @@
 use actix_web::{HttpRequest, HttpResponse, Responder, get, web};
 use serde::Deserialize;
 use std::net::{Ipv4Addr, Ipv6Addr};
+use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::AppState;
 use crate::auth::{parse_basic_auth, verify_user};
 use crate::dns::DnsError;
+use crate::security::{AuthRateLimiter, auth_failure_delay, auth_rate_limit_key, sanitize_for_log};
 
 #[derive(Deserialize)]
 pub struct UpdateQuery {
@@ -25,35 +27,86 @@ pub async fn update(
     query: web::Query<UpdateQuery>,
     state: web::Data<AppState>,
 ) -> impl Responder {
-    let (username, password) = match parse_basic_auth(&req) {
+    let peer = req.peer_addr().map(|addr| addr.ip().to_string());
+    let credentials = parse_basic_auth(&req);
+    let limiter_key = auth_rate_limit_key(
+        peer.as_deref(),
+        credentials.as_ref().map(|(username, _)| username.as_str()),
+    );
+
+    if !state.auth_limiter.allow_attempt(&limiter_key) {
+        sleep(auth_failure_delay()).await;
+        return HttpResponse::TooManyRequests().body("Too many authentication attempts");
+    }
+
+    let (username, password) = match credentials {
         Some(c) => c,
         None => {
+            state.auth_limiter.record_failure(&limiter_key);
+            sleep(auth_failure_delay()).await;
             return HttpResponse::Unauthorized()
                 .append_header(("WWW-Authenticate", "Basic realm=\"KDynDNS\""))
                 .body("Unauthorized");
         }
     };
+    let safe_username = sanitize_for_log(&username);
 
-    let cfg = state.config.read().unwrap();
+    let cfg = match state.config.read() {
+        Ok(cfg) => cfg.clone(),
+        Err(_) => {
+            warn!(
+                "Config lock poisoned during auth for user '{}'",
+                safe_username
+            );
+            return HttpResponse::InternalServerError().body("Internal server error");
+        }
+    };
 
-    let user = match verify_user(&cfg, &username, &password) {
+    let auth_slot = match state.auth_slots.acquire().await {
+        Ok(slot) => slot,
+        Err(_) => return HttpResponse::ServiceUnavailable().body("Authentication unavailable"),
+    };
+
+    let username_for_verify = username.clone();
+    let password_for_verify = password;
+    let user = match tokio::task::spawn_blocking(move || {
+        verify_user(&cfg, &username_for_verify, &password_for_verify)
+    })
+    .await
+    {
+        Ok(user) => user,
+        Err(e) => {
+            warn!(
+                "Password verification task failed for user '{}': {}",
+                safe_username, e
+            );
+            return HttpResponse::InternalServerError().body("Internal server error");
+        }
+    };
+    drop(auth_slot);
+
+    let user = match user {
         Some(u) => u,
         None => {
-            warn!("Auth failed for user '{}'", username);
+            state.auth_limiter.record_failure(&limiter_key);
+            sleep(auth_failure_delay()).await;
+            warn!("Auth failed for user '{}'", safe_username);
             return HttpResponse::Unauthorized().body("Invalid credentials");
         }
     };
+    state.auth_limiter.reset_key(&limiter_key);
 
     let host_norm = if query.host.ends_with('.') {
         query.host.trim().to_string()
     } else {
         format!("{}.", query.host.trim())
     };
+    let safe_host = sanitize_for_log(&host_norm);
 
     if !user.allowed_hosts.iter().any(|h| h == &host_norm) {
         warn!(
             "User '{}' is not allowed to update host '{}'",
-            username, host_norm
+            safe_username, safe_host
         );
         return HttpResponse::Forbidden().body("Host not allowed");
     }
@@ -84,18 +137,18 @@ pub async fn update(
 
     info!(
         "Update request: user={}, host={}, ipv4={:?}, ipv6={:?}",
-        username, host_norm, ipv4, ipv6
+        safe_username, safe_host, ipv4, ipv6
     );
 
     match state
         .updater
-        .update_records(user, &host_norm, ipv4, ipv6)
+        .update_records(&user, &host_norm, ipv4, ipv6)
         .await
     {
         Ok(()) => HttpResponse::Ok().body("OK"),
         Err(DnsError::InvalidHost) => HttpResponse::BadRequest().body("Invalid host"),
         Err(DnsError::UpdateFailed(e)) => {
-            warn!("DNS update failed for {}: {}", host_norm, e);
+            warn!("DNS update failed for {}: {}", safe_host, e);
             HttpResponse::InternalServerError().body("DNS update failed")
         }
     }
@@ -110,12 +163,19 @@ mod tests {
     use argon2::password_hash::rand_core::OsRng;
     use base64::prelude::*;
     use std::sync::{Arc, RwLock};
+    use std::time::Duration;
+    use tokio::sync::Semaphore;
 
     use crate::AppState;
     use crate::config::{AppConfig, UserConfig};
     use crate::dns::MockDnsUpdater;
+    use crate::security::default_auth_concurrency_limit;
 
     fn build_test_state(should_fail: bool) -> AppState {
+        build_test_state_with_limiter(should_fail, AuthRateLimiter::default())
+    }
+
+    fn build_test_state_with_limiter(should_fail: bool, auth_limiter: AuthRateLimiter) -> AppState {
         let salt = SaltString::generate(&mut OsRng);
         let argon2 = argon2::Argon2::default();
         let hash = argon2.hash_password(b"secret", &salt).unwrap().to_string();
@@ -138,6 +198,8 @@ mod tests {
         AppState {
             config: Arc::new(RwLock::new(cfg)),
             updater: Arc::new(updater),
+            auth_limiter: Arc::new(auth_limiter),
+            auth_slots: Arc::new(Semaphore::new(default_auth_concurrency_limit())),
         }
     }
 
@@ -195,5 +257,31 @@ mod tests {
 
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), 500);
+    }
+
+    #[actix_web::test]
+    async fn repeated_auth_failures_are_rate_limited() {
+        let state = build_test_state_with_limiter(
+            false,
+            AuthRateLimiter::new(Duration::from_secs(60), 100, 1),
+        );
+        let app =
+            test::init_service(App::new().app_data(web::Data::new(state)).service(update)).await;
+
+        let token = BASE64_STANDARD.encode("user:wrong");
+        let req = test::TestRequest::get()
+            .uri("/update?host=test.example.com.&ipv4=1.2.3.4")
+            .append_header(("Authorization", format!("Basic {}", token)))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 401);
+
+        let token = BASE64_STANDARD.encode("user:wrong");
+        let req = test::TestRequest::get()
+            .uri("/update?host=test.example.com.&ipv4=1.2.3.4")
+            .append_header(("Authorization", format!("Basic {}", token)))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 429);
     }
 }

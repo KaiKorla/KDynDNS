@@ -8,8 +8,9 @@ A minimalistic DynDNS service written in Rust.
 - systemd socket activation support (reuses the provided unix-socket before binding its own)
 - simple and plain TOML configuration file (see below)
 - HTTP basic auth and Argon2id hashing of the credentials
+- authentication throttling and bounded password-verification concurrency
 - IPv4 and IPv6 support including removing of existing entries
-- RFC 2136 updates via `dns-update` crate (TSIG), no external `nsupdate` binary required
+- RFC 2136 updates via `hickory-client` (TSIG), no external `nsupdate` binary required
 - SIGUSR1 support for runtime configuration reloading
 
 ## Development
@@ -98,7 +99,7 @@ cargo run --release
   - `ipv4` (optional) — IPv4 literal; empty or invalid values rejected.
   - `ipv6` (optional) — IPv6 literal; empty or invalid values rejected.
   - At least one of `ipv4` or `ipv6` must be present and valid.
-- Responses: `200 OK` on success; `400` for missing/invalid params; `401` for missing/invalid credentials (with `WWW-Authenticate`); `403` if the host is not allowed; `500` if the DNS update fails.
+- Responses: `200 OK` on success; `400` for missing/invalid params; `401` for missing/invalid credentials (with `WWW-Authenticate`); `403` if the host is not allowed; `429` when authentication attempts are throttled; `500` if the DNS update fails.
 - Example using curl on the unix socket:
 
     ```bash
