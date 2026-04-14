@@ -33,6 +33,35 @@ No security-specific changes documented.
 
 ---
 
+## [4.0.1]
+
+### Added
+
+No new features.
+
+### Changed
+
+- Updated transitive Rust dependencies in `Cargo.lock` to newer compatible crate versions, including `rand`, `rand_core`, `libc`, `bitflags`, `indexmap`, `hashbrown`, `js-sys`, `wasm-bindgen`, `cc`, `pkg-config`, and `rtoolbox`.
+- Regenerated `Cargo.lock` to record the refreshed crate versions, dependency graph metadata, and checksums.
+
+### Deprecated
+
+No deprecated features.
+
+### Removed
+
+No removed features.
+
+### Fixed
+
+No bug fixes.
+
+### Security
+
+No security-specific changes documented.
+
+---
+
 ## [4.0.0] - 2026-04-08
 
 ### Added
