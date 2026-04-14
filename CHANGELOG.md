@@ -12,7 +12,8 @@ No new features.
 
 ### Changed
 
-No changes yet.
+- Updated transitive Rust dependencies in `Cargo.lock` to newer compatible crate versions, including `rand`, `rand_core`, `libc`, `bitflags`, `indexmap`, `hashbrown`, `js-sys`, `wasm-bindgen`, `cc`, `pkg-config`, and `rtoolbox`.
+- Regenerated `Cargo.lock` to record the refreshed crate versions, dependency graph metadata, and checksums.
 
 ### Deprecated
 
