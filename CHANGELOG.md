@@ -12,6 +12,34 @@ No new features.
 
 ### Changed
 
+No changes.
+
+### Deprecated
+
+No deprecated features.
+
+### Removed
+
+No removed features.
+
+### Fixed
+
+No bug fixes.
+
+### Security
+
+No security-specific changes documented.
+
+---
+
+## [4.0.2] - 2026-05-12
+
+### Added
+
+No new features.
+
+### Changed
+
 - Updated `hickory-client` from 0.24 to 0.25.
 - Updated transitive Rust dependencies in `Cargo.lock` to newer compatible crate versions, including `rand`, `rand_core`, `libc`, `bitflags`, `indexmap`, `hashbrown`, `js-sys`, `wasm-bindgen`, `cc`, `pkg-config`, and `rtoolbox`.
 - Regenerated `Cargo.lock` to record the refreshed crate versions, dependency graph metadata, and checksums.
