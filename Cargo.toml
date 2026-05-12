@@ -18,5 +18,5 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 listenfd = "1"
-hickory-client = { version = "0.24", features = ["dnssec-ring"] }
+hickory-client = { version = "0.25", features = ["dnssec-ring"] }
 futures-util = "0.3"

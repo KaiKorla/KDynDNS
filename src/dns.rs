@@ -1,17 +1,18 @@
 use async_trait::async_trait;
 use base64::prelude::*;
 use futures_util::StreamExt;
-use hickory_client::client::{AsyncClient, ClientConnection, ClientHandle, Signer};
-use hickory_client::op::ResponseCode;
-use hickory_client::proto::op::{Edns, Message, MessageType, OpCode, Query, UpdateMessage};
-use hickory_client::proto::rr::dnssec::tsig::TSigner;
+use hickory_client::client::{Client as AsyncClient, ClientHandle};
+use hickory_client::proto::dnssec::rdata::tsig::TsigAlgorithm as HickoryTsigAlgorithm;
+use hickory_client::proto::dnssec::tsig::TSigner;
+use hickory_client::proto::op::{
+    Edns, Message, MessageFinalizer, MessageType, OpCode, Query, ResponseCode, UpdateMessage,
+};
+use hickory_client::proto::rr::rdata::{A, AAAA};
+use hickory_client::proto::rr::{DNSClass, Name, RData, Record, RecordType};
+use hickory_client::proto::runtime::TokioRuntimeProvider;
+use hickory_client::proto::tcp::TcpClientStream;
+use hickory_client::proto::udp::UdpClientStream;
 use hickory_client::proto::xfer::DnsHandle;
-use hickory_client::rr::rdata::NULL;
-use hickory_client::rr::rdata::tsig::TsigAlgorithm as HickoryTsigAlgorithm;
-use hickory_client::rr::rdata::{A, AAAA};
-use hickory_client::rr::{DNSClass, Name, RData, Record, RecordType};
-use hickory_client::tcp::TcpClientConnection;
-use hickory_client::udp::UdpClientConnection;
 use rand::random;
 use std::fs;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -250,7 +251,7 @@ async fn connect_rfc2136_client(
 ) -> Result<AsyncClient, DnsError> {
     let address = parse_dns_server_address(server)?;
     validate_tsig_material(key_name, key_secret, algorithm)?;
-    let signer = Arc::new(Signer::from(
+    let signer: Arc<dyn MessageFinalizer> = Arc::new(
         TSigner::new(
             key_secret.to_vec(),
             to_hickory_tsig_algorithm(algorithm),
@@ -259,33 +260,37 @@ async fn connect_rfc2136_client(
             60,
         )
         .map_err(|e| DnsError::UpdateFailed(e.to_string()))?,
-    ));
+    );
 
     match address {
         DnsServerAddress::Udp(addr) => {
-            let connection = UdpClientConnection::with_timeout(addr, DNS_REQUEST_TIMEOUT)
-                .map_err(|e| DnsError::UpdateFailed(e.to_string()))?;
-            let (client, background) = timeout(
-                DNS_REQUEST_TIMEOUT,
-                AsyncClient::connect(connection.new_stream(Some(signer))),
-            )
-            .await
-            .map_err(|_| {
-                DnsError::UpdateFailed(format!(
-                    "DNS connection timed out after {:?}",
-                    DNS_REQUEST_TIMEOUT
-                ))
-            })?
-            .map_err(|e| DnsError::UpdateFailed(e.to_string()))?;
+            let connection = UdpClientStream::builder(addr, TokioRuntimeProvider::new())
+                .with_timeout(Some(DNS_REQUEST_TIMEOUT))
+                .with_signer(Some(signer))
+                .build();
+            let (client, background) =
+                timeout(DNS_REQUEST_TIMEOUT, AsyncClient::connect(connection))
+                    .await
+                    .map_err(|_| {
+                        DnsError::UpdateFailed(format!(
+                            "DNS connection timed out after {:?}",
+                            DNS_REQUEST_TIMEOUT
+                        ))
+                    })?
+                    .map_err(|e| DnsError::UpdateFailed(e.to_string()))?;
             tokio::spawn(background);
             Ok(client)
         }
         DnsServerAddress::Tcp(addr) => {
-            let connection = TcpClientConnection::with_timeout(addr, DNS_REQUEST_TIMEOUT)
-                .map_err(|e| DnsError::UpdateFailed(e.to_string()))?;
+            let (stream, sender) = TcpClientStream::new(
+                addr,
+                None,
+                Some(DNS_REQUEST_TIMEOUT),
+                TokioRuntimeProvider::new(),
+            );
             let (client, background) = timeout(
                 DNS_REQUEST_TIMEOUT,
-                AsyncClient::connect(connection.new_stream(Some(signer))),
+                AsyncClient::with_timeout(stream, sender, DNS_REQUEST_TIMEOUT, Some(signer)),
             )
             .await
             .map_err(|_| {
@@ -360,9 +365,8 @@ fn new_update_message(zone: Name, use_edns: bool) -> Message {
 }
 
 fn delete_rrset_record(name: Name, record_type: RecordType) -> Record {
-    let mut record = Record::with(name, record_type, 0);
+    let mut record = Record::update0(name, 0, record_type);
     record.set_dns_class(DNSClass::ANY);
-    record.set_data(Some(RData::NULL(NULL::new())));
     record
 }
 

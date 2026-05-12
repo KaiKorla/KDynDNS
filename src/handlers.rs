@@ -188,7 +188,6 @@ mod tests {
     use actix_web::{App, test};
     use argon2::PasswordHasher;
     use argon2::password_hash::SaltString;
-    use argon2::password_hash::rand_core::OsRng;
     use base64::prelude::*;
     use std::sync::{Arc, RwLock};
     use std::time::Duration;
@@ -199,12 +198,14 @@ mod tests {
     use crate::dns::MockDnsUpdater;
     use crate::security::{AuthRateLimiter, default_auth_concurrency_limit};
 
+    const TEST_SALT: &str = "WnJ1TFZNZEQ0QTR2ZTBJWmU1U3VRZz09";
+
     fn build_test_state(should_fail: bool) -> AppState {
         build_test_state_with_limiter(should_fail, AuthRateLimiter::default())
     }
 
     fn build_test_state_with_limiter(should_fail: bool, auth_limiter: AuthRateLimiter) -> AppState {
-        let salt = SaltString::generate(&mut OsRng);
+        let salt = SaltString::from_b64(TEST_SALT).unwrap();
         let argon2 = argon2::Argon2::default();
         let hash = argon2.hash_password(b"secret", &salt).unwrap().to_string();
 

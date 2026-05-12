@@ -12,6 +12,7 @@ No new features.
 
 ### Changed
 
+- Updated `hickory-client` from 0.24 to 0.25.
 - Updated transitive Rust dependencies in `Cargo.lock` to newer compatible crate versions, including `rand`, `rand_core`, `libc`, `bitflags`, `indexmap`, `hashbrown`, `js-sys`, `wasm-bindgen`, `cc`, `pkg-config`, and `rtoolbox`.
 - Regenerated `Cargo.lock` to record the refreshed crate versions, dependency graph metadata, and checksums.
 
@@ -25,7 +26,8 @@ No removed features.
 
 ### Fixed
 
-No bug fixes.
+- Fixed DNS update compilation with `hickory-client` 0.25 by switching to the new client, stream, TSIG, and RFC 2136 update APIs.
+- Fixed password-hash test helpers after dependency updates by using deterministic test salts instead of unavailable RNG re-exports.
 
 ### Security
 
