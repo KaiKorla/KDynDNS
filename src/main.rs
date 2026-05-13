@@ -72,6 +72,7 @@ async fn main() -> std::io::Result<()> {
     let mut server = HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(state.clone()))
+            .service(handlers::index)
             .service(handlers::health)
             .service(handlers::update)
     });

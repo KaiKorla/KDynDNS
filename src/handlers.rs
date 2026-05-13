@@ -16,6 +16,11 @@ pub struct UpdateQuery {
     pub ipv6: Option<String>,
 }
 
+#[get("/")]
+pub async fn index() -> impl Responder {
+    HttpResponse::Ok().body("KDynDns - https://github.com/KaiKorla/KDynDNS")
+}
+
 #[get("/health")]
 pub async fn health() -> impl Responder {
     HttpResponse::Ok().body("OK")

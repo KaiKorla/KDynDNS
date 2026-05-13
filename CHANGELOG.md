@@ -32,6 +32,34 @@ No security-specific changes documented.
 
 ---
 
+## [5.0.0] - 2026-05-13
+
+### Added
+
+- Added a root `/` endpoint that returns the KDynDNS project name and GitHub repository URL.
+
+### Changed
+
+No changes.
+
+### Deprecated
+
+No deprecated features.
+
+### Removed
+
+No removed features.
+
+### Fixed
+
+No bug fixes.
+
+### Security
+
+No security-specific changes documented.
+
+---
+
 ## [4.0.3] - 2026-05-13
 
 ### Added
