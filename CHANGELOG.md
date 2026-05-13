@@ -32,6 +32,34 @@ No security-specific changes documented.
 
 ---
 
+## [4.0.3] - 2026-05-13
+
+### Added
+
+No new features.
+
+### Changed
+
+- Added startup logging that reports whether KDynDNS uses a systemd-provided Unix socket or binds `/run/kdyndns/kdyndns.sock` directly.
+
+### Deprecated
+
+No deprecated features.
+
+### Removed
+
+No removed features.
+
+### Fixed
+
+No bug fixes.
+
+### Security
+
+No security-specific changes documented.
+
+---
+
 ## [4.0.2] - 2026-05-12
 
 ### Added

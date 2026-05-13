@@ -78,11 +78,13 @@ async fn main() -> std::io::Result<()> {
 
     let mut listenfd = ListenFd::from_env();
 
-    server = if let Some(listener) = listenfd.take_unix_listener(0)? {
-        server.listen_uds(listener)?
+    if let Some(listener) = listenfd.take_unix_listener(0)? {
+        tracing::info!("using systemd-provided unix socket");
+        server = server.listen_uds(listener)?;
     } else {
-        server.bind_uds("/run/kdyndns/kdyndns.sock")?
-    };
+        tracing::warn!("no systemd socket received; binding unix socket directly");
+        server = server.bind_uds("/run/kdyndns/kdyndns.sock")?;
+    }
 
     info!(
         "KDynDNS is listening on unix socket: {:#?}",
