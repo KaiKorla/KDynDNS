@@ -12,6 +12,34 @@ No new features.
 
 ### Changed
 
+No changes.
+
+### Deprecated
+
+No deprecated features.
+
+### Removed
+
+No removed features.
+
+### Fixed
+
+No bug fixes.
+
+### Security
+
+No security-specific changes documented.
+
+---
+
+## [6.0.0] - 2026-05-14
+
+### Added
+
+No new features.
+
+### Changed
+
 - Migrated RFC 2136 DNS updates from `hickory-client` to `hickory-net` and `hickory-proto`.
 - Reduced dependency feature sets to the features used by KDynDNS.
 
