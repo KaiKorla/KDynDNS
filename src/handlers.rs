@@ -1,3 +1,4 @@
+use actix_web::mime;
 use actix_web::{HttpRequest, HttpResponse, Responder, get, web};
 use serde::Deserialize;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -18,12 +19,189 @@ pub struct UpdateQuery {
 
 #[get("/")]
 pub async fn index() -> impl Responder {
-    HttpResponse::Ok().body("KDynDns - https://github.com/KaiKorla/KDynDNS")
+    HttpResponse::Ok()
+        .content_type(mime::TEXT_HTML)
+        .body("KDynDns - https://github.com/KaiKorla/KDynDNS")
 }
 
 #[get("/health")]
 pub async fn health() -> impl Responder {
-    HttpResponse::Ok().body("OK")
+    HttpResponse::Ok().content_type(mime::TEXT_HTML).body("OK")
+}
+
+#[get("/update")]
+pub async fn update(
+    req: HttpRequest,
+    query: web::Query<UpdateQuery>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let peer = request_client_ip(&req);
+    let credentials = parse_basic_auth(&req);
+    let limiter_key = auth_rate_limit_key(
+        peer.as_deref(),
+        credentials.as_ref().map(|(username, _)| username.as_str()),
+    );
+
+    if !state.auth_limiter.allow_attempt(&limiter_key) {
+        sleep(auth_failure_delay()).await;
+        return HttpResponse::TooManyRequests()
+            .content_type(mime::TEXT_HTML)
+            .body("Too many authentication attempts");
+    }
+
+    let (username, password) = match credentials {
+        Some(c) => c,
+        None => {
+            state.auth_limiter.record_failure(&limiter_key);
+            sleep(auth_failure_delay()).await;
+            return HttpResponse::Unauthorized()
+                .append_header(("WWW-Authenticate", "Basic realm=\"KDynDNS\""))
+                .body("Unauthorized");
+        }
+    };
+    let safe_username = sanitize_for_log(&username);
+
+    let cfg = match state.config.read() {
+        Ok(cfg) => cfg.clone(),
+        Err(_) => {
+            warn!(
+                "Config lock poisoned during auth for user '{}'",
+                safe_username
+            );
+            return HttpResponse::InternalServerError()
+                .content_type(mime::TEXT_HTML)
+                .body("Internal server error");
+        }
+    };
+
+    let auth_slot = match state.auth_slots.acquire().await {
+        Ok(slot) => slot,
+        Err(_) => {
+            return HttpResponse::ServiceUnavailable()
+                .content_type(mime::TEXT_HTML)
+                .body("Authentication unavailable");
+        }
+    };
+
+    let username_for_verify = username.clone();
+    let password_for_verify = password;
+    let user = match tokio::task::spawn_blocking(move || {
+        verify_user(&cfg, &username_for_verify, &password_for_verify)
+    })
+    .await
+    {
+        Ok(user) => user,
+        Err(e) => {
+            warn!(
+                "Password verification task failed for user '{}': {}",
+                safe_username, e
+            );
+            return HttpResponse::InternalServerError()
+                .content_type(mime::TEXT_HTML)
+                .body("Internal server error");
+        }
+    };
+    drop(auth_slot);
+
+    let user = match user {
+        Some(u) => u,
+        None => {
+            state.auth_limiter.record_failure(&limiter_key);
+            sleep(auth_failure_delay()).await;
+            warn!("Auth failed for user '{}'", safe_username);
+            return HttpResponse::Unauthorized()
+                .content_type(mime::TEXT_HTML)
+                .body("Invalid credentials");
+        }
+    };
+    state.auth_limiter.reset_key(&limiter_key);
+
+    let host_norm = match normalize_fqdn(&query.host) {
+        Ok(host) => host,
+        Err(DnsError::InvalidHost) => {
+            return HttpResponse::BadRequest()
+                .content_type(mime::TEXT_HTML)
+                .body("Invalid host");
+        }
+        Err(DnsError::UpdateFailed(_)) => {
+            return HttpResponse::BadRequest()
+                .content_type(mime::TEXT_HTML)
+                .body("Invalid host");
+        }
+    };
+    let safe_host = sanitize_for_log(&host_norm);
+
+    if !user
+        .allowed_hosts
+        .iter()
+        .any(|allowed_host| allowed_host == &host_norm)
+    {
+        warn!(
+            "User '{}' is not allowed to update host '{}'",
+            safe_username, safe_host
+        );
+        return HttpResponse::Forbidden()
+            .content_type(mime::TEXT_HTML)
+            .body("Host not allowed");
+    }
+
+    if query.ipv4.is_none() && query.ipv6.is_none() {
+        return HttpResponse::BadRequest()
+            .content_type(mime::TEXT_HTML)
+            .body("At least one of ipv4 or ipv6 required");
+    }
+
+    let ipv4: Option<Ipv4Addr> = match &query.ipv4 {
+        Some(v) if !v.trim().is_empty() => match v.trim().parse() {
+            Ok(ip) => Some(ip),
+            Err(_) => {
+                return HttpResponse::BadRequest()
+                    .content_type(mime::TEXT_HTML)
+                    .body("Invalid ipv4 format");
+            }
+        },
+        _ => None,
+    };
+
+    let ipv6: Option<Ipv6Addr> = match &query.ipv6 {
+        Some(v) if !v.trim().is_empty() => match v.trim().parse() {
+            Ok(ip) => Some(ip),
+            Err(_) => {
+                return HttpResponse::BadRequest()
+                    .content_type(mime::TEXT_HTML)
+                    .body("Invalid ipv6 format");
+            }
+        },
+        _ => None,
+    };
+
+    if ipv4.is_none() && ipv6.is_none() {
+        return HttpResponse::BadRequest()
+            .content_type(mime::TEXT_HTML)
+            .body("ipv4/ipv6 empty or invalid");
+    }
+
+    info!(
+        "Update request: user={}, host={}, ipv4={:?}, ipv6={:?}",
+        safe_username, safe_host, ipv4, ipv6
+    );
+
+    match state
+        .updater
+        .update_records(&user, &host_norm, ipv4, ipv6)
+        .await
+    {
+        Ok(()) => HttpResponse::Ok().content_type(mime::TEXT_HTML).body("OK"),
+        Err(DnsError::InvalidHost) => HttpResponse::BadRequest()
+            .content_type(mime::TEXT_HTML)
+            .body("Invalid host"),
+        Err(DnsError::UpdateFailed(e)) => {
+            warn!("DNS update failed for {}: {}", safe_host, e);
+            HttpResponse::InternalServerError()
+                .content_type(mime::TEXT_HTML)
+                .body("DNS update failed")
+        }
+    }
 }
 
 fn forwarded_client_ip(req: &HttpRequest) -> Option<String> {
@@ -48,143 +226,6 @@ fn forwarded_client_ip(req: &HttpRequest) -> Option<String> {
 
 fn request_client_ip(req: &HttpRequest) -> Option<String> {
     forwarded_client_ip(req).or_else(|| req.peer_addr().map(|addr| addr.ip().to_string()))
-}
-
-#[get("/update")]
-pub async fn update(
-    req: HttpRequest,
-    query: web::Query<UpdateQuery>,
-    state: web::Data<AppState>,
-) -> impl Responder {
-    let peer = request_client_ip(&req);
-    let credentials = parse_basic_auth(&req);
-    let limiter_key = auth_rate_limit_key(
-        peer.as_deref(),
-        credentials.as_ref().map(|(username, _)| username.as_str()),
-    );
-
-    if !state.auth_limiter.allow_attempt(&limiter_key) {
-        sleep(auth_failure_delay()).await;
-        return HttpResponse::TooManyRequests().body("Too many authentication attempts");
-    }
-
-    let (username, password) = match credentials {
-        Some(c) => c,
-        None => {
-            state.auth_limiter.record_failure(&limiter_key);
-            sleep(auth_failure_delay()).await;
-            return HttpResponse::Unauthorized()
-                .append_header(("WWW-Authenticate", "Basic realm=\"KDynDNS\""))
-                .body("Unauthorized");
-        }
-    };
-    let safe_username = sanitize_for_log(&username);
-
-    let cfg = match state.config.read() {
-        Ok(cfg) => cfg.clone(),
-        Err(_) => {
-            warn!(
-                "Config lock poisoned during auth for user '{}'",
-                safe_username
-            );
-            return HttpResponse::InternalServerError().body("Internal server error");
-        }
-    };
-
-    let auth_slot = match state.auth_slots.acquire().await {
-        Ok(slot) => slot,
-        Err(_) => return HttpResponse::ServiceUnavailable().body("Authentication unavailable"),
-    };
-
-    let username_for_verify = username.clone();
-    let password_for_verify = password;
-    let user = match tokio::task::spawn_blocking(move || {
-        verify_user(&cfg, &username_for_verify, &password_for_verify)
-    })
-    .await
-    {
-        Ok(user) => user,
-        Err(e) => {
-            warn!(
-                "Password verification task failed for user '{}': {}",
-                safe_username, e
-            );
-            return HttpResponse::InternalServerError().body("Internal server error");
-        }
-    };
-    drop(auth_slot);
-
-    let user = match user {
-        Some(u) => u,
-        None => {
-            state.auth_limiter.record_failure(&limiter_key);
-            sleep(auth_failure_delay()).await;
-            warn!("Auth failed for user '{}'", safe_username);
-            return HttpResponse::Unauthorized().body("Invalid credentials");
-        }
-    };
-    state.auth_limiter.reset_key(&limiter_key);
-
-    let host_norm = match normalize_fqdn(&query.host) {
-        Ok(host) => host,
-        Err(DnsError::InvalidHost) => return HttpResponse::BadRequest().body("Invalid host"),
-        Err(DnsError::UpdateFailed(_)) => return HttpResponse::BadRequest().body("Invalid host"),
-    };
-    let safe_host = sanitize_for_log(&host_norm);
-
-    if !user
-        .allowed_hosts
-        .iter()
-        .any(|allowed_host| allowed_host == &host_norm)
-    {
-        warn!(
-            "User '{}' is not allowed to update host '{}'",
-            safe_username, safe_host
-        );
-        return HttpResponse::Forbidden().body("Host not allowed");
-    }
-
-    if query.ipv4.is_none() && query.ipv6.is_none() {
-        return HttpResponse::BadRequest().body("At least one of ipv4 or ipv6 required");
-    }
-
-    let ipv4: Option<Ipv4Addr> = match &query.ipv4 {
-        Some(v) if !v.trim().is_empty() => match v.trim().parse() {
-            Ok(ip) => Some(ip),
-            Err(_) => return HttpResponse::BadRequest().body("Invalid ipv4 format"),
-        },
-        _ => None,
-    };
-
-    let ipv6: Option<Ipv6Addr> = match &query.ipv6 {
-        Some(v) if !v.trim().is_empty() => match v.trim().parse() {
-            Ok(ip) => Some(ip),
-            Err(_) => return HttpResponse::BadRequest().body("Invalid ipv6 format"),
-        },
-        _ => None,
-    };
-
-    if ipv4.is_none() && ipv6.is_none() {
-        return HttpResponse::BadRequest().body("ipv4/ipv6 empty or invalid");
-    }
-
-    info!(
-        "Update request: user={}, host={}, ipv4={:?}, ipv6={:?}",
-        safe_username, safe_host, ipv4, ipv6
-    );
-
-    match state
-        .updater
-        .update_records(&user, &host_norm, ipv4, ipv6)
-        .await
-    {
-        Ok(()) => HttpResponse::Ok().body("OK"),
-        Err(DnsError::InvalidHost) => HttpResponse::BadRequest().body("Invalid host"),
-        Err(DnsError::UpdateFailed(e)) => {
-            warn!("DNS update failed for {}: {}", safe_host, e);
-            HttpResponse::InternalServerError().body("DNS update failed")
-        }
-    }
 }
 
 #[cfg(test)]

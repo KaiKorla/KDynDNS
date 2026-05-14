@@ -12,7 +12,8 @@ No new features.
 
 ### Changed
 
-No changes.
+- Migrated RFC 2136 DNS updates from `hickory-client` to `hickory-net` and `hickory-proto`.
+- Reduced dependency feature sets to the features used by KDynDNS.
 
 ### Deprecated
 

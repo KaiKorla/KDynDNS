@@ -10,7 +10,7 @@ A minimalistic DynDNS service written in Rust.
 - HTTP basic auth and Argon2id hashing of the credentials
 - authentication throttling and bounded password-verification concurrency
 - IPv4 and IPv6 DynDNS updates for `A` and `AAAA` only; other RR types stay untouched
-- RFC 2136 updates via `hickory-client` (TSIG), no external `nsupdate` binary required
+- RFC 2136 updates via `hickory-net`/`hickory-proto` (TSIG), no external `nsupdate` binary required
 - configuration is validated semantically on startup and `SIGUSR1` reload before it becomes active
 - SIGUSR1 support for runtime configuration reloading
 

@@ -1,28 +1,25 @@
 use async_trait::async_trait;
 use base64::prelude::*;
 use futures_util::StreamExt;
-use hickory_client::client::{Client as AsyncClient, ClientHandle};
-use hickory_client::proto::dnssec::rdata::tsig::TsigAlgorithm as HickoryTsigAlgorithm;
-use hickory_client::proto::dnssec::tsig::TSigner;
-use hickory_client::proto::op::{
-    Edns, Message, MessageFinalizer, MessageType, OpCode, Query, ResponseCode, UpdateMessage,
-};
-use hickory_client::proto::rr::rdata::{A, AAAA};
-use hickory_client::proto::rr::{DNSClass, Name, RData, Record, RecordType};
-use hickory_client::proto::runtime::TokioRuntimeProvider;
-use hickory_client::proto::tcp::TcpClientStream;
-use hickory_client::proto::udp::UdpClientStream;
-use hickory_client::proto::xfer::DnsHandle;
-use rand::random;
+use hickory_net::client::{Client, ClientHandle};
+use hickory_net::runtime::TokioRuntimeProvider;
+use hickory_net::tcp::TcpClientStream;
+use hickory_net::udp::UdpClientStream;
+use hickory_net::xfer::{DnsHandle, DnsMultiplexer};
+use hickory_proto::op::{Edns, Message, MessageType, OpCode, Query, ResponseCode, UpdateMessage};
+use hickory_proto::rr::rdata::tsig::TsigAlgorithm as HickoryTsigAlgorithm;
+use hickory_proto::rr::rdata::{A, AAAA};
+use hickory_proto::rr::{DNSClass, Name, RData, Record, RecordType, TSigner};
 use std::fs;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::time::timeout;
 use tracing::info;
 
 use crate::config::UserConfig;
+
+type AsyncClient = Client<TokioRuntimeProvider>;
 
 const DNS_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const DNS_UPDATE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -215,11 +212,11 @@ fn to_hickory_tsig_algorithm(algorithm: ParsedTsigAlgorithm) -> HickoryTsigAlgor
     }
 }
 
-fn validate_tsig_material(
+fn new_tsig_signer(
     key_name: &str,
     key_secret: &[u8],
     algorithm: ParsedTsigAlgorithm,
-) -> Result<(), DnsError> {
+) -> Result<TSigner, DnsError> {
     TSigner::new(
         key_secret.to_vec(),
         to_hickory_tsig_algorithm(algorithm),
@@ -227,8 +224,15 @@ fn validate_tsig_material(
             .map_err(|e| DnsError::UpdateFailed(format!("Invalid TSIG key name: {}", e)))?,
         60,
     )
-    .map(|_| ())
     .map_err(|e| DnsError::UpdateFailed(e.to_string()))
+}
+
+fn validate_tsig_material(
+    key_name: &str,
+    key_secret: &[u8],
+    algorithm: ParsedTsigAlgorithm,
+) -> Result<(), DnsError> {
+    new_tsig_signer(key_name, key_secret, algorithm).map(|_| ())
 }
 
 pub(crate) fn validate_dns_server_address(server: &str) -> Result<(), String> {
@@ -250,17 +254,7 @@ async fn connect_rfc2136_client(
     algorithm: ParsedTsigAlgorithm,
 ) -> Result<AsyncClient, DnsError> {
     let address = parse_dns_server_address(server)?;
-    validate_tsig_material(key_name, key_secret, algorithm)?;
-    let signer: Arc<dyn MessageFinalizer> = Arc::new(
-        TSigner::new(
-            key_secret.to_vec(),
-            to_hickory_tsig_algorithm(algorithm),
-            Name::from_ascii(key_name)
-                .map_err(|e| DnsError::UpdateFailed(format!("Invalid TSIG key name: {}", e)))?,
-            60,
-        )
-        .map_err(|e| DnsError::UpdateFailed(e.to_string()))?,
-    );
+    let signer = new_tsig_signer(key_name, key_secret, algorithm)?;
 
     match address {
         DnsServerAddress::Udp(addr) => {
@@ -268,16 +262,7 @@ async fn connect_rfc2136_client(
                 .with_timeout(Some(DNS_REQUEST_TIMEOUT))
                 .with_signer(Some(signer))
                 .build();
-            let (client, background) =
-                timeout(DNS_REQUEST_TIMEOUT, AsyncClient::connect(connection))
-                    .await
-                    .map_err(|_| {
-                        DnsError::UpdateFailed(format!(
-                            "DNS connection timed out after {:?}",
-                            DNS_REQUEST_TIMEOUT
-                        ))
-                    })?
-                    .map_err(|e| DnsError::UpdateFailed(e.to_string()))?;
+            let (client, background) = AsyncClient::from_sender(connection);
             tokio::spawn(background);
             Ok(client)
         }
@@ -288,18 +273,17 @@ async fn connect_rfc2136_client(
                 Some(DNS_REQUEST_TIMEOUT),
                 TokioRuntimeProvider::new(),
             );
-            let (client, background) = timeout(
-                DNS_REQUEST_TIMEOUT,
-                AsyncClient::with_timeout(stream, sender, DNS_REQUEST_TIMEOUT, Some(signer)),
-            )
-            .await
-            .map_err(|_| {
+            let stream = timeout(DNS_REQUEST_TIMEOUT, stream).await.map_err(|_| {
                 DnsError::UpdateFailed(format!(
                     "DNS connection timed out after {:?}",
                     DNS_REQUEST_TIMEOUT
                 ))
-            })?
-            .map_err(|e| DnsError::UpdateFailed(e.to_string()))?;
+            })?;
+            let stream = stream.map_err(|e| DnsError::UpdateFailed(e.to_string()))?;
+            let multiplexer = DnsMultiplexer::new(stream, sender)
+                .with_timeout(DNS_REQUEST_TIMEOUT)
+                .with_signer(signer);
+            let (client, background) = AsyncClient::from_sender(multiplexer);
             tokio::spawn(background);
             Ok(client)
         }
@@ -320,7 +304,7 @@ fn parse_name(value: &str) -> Result<Name, DnsError> {
 
 async fn send_update_message(client: &AsyncClient, message: Message) -> Result<(), DnsError> {
     let maybe_response = timeout(DNS_REQUEST_TIMEOUT, async {
-        let mut stream = client.send(message);
+        let mut stream = client.send(message.into());
         stream.next().await
     })
     .await
@@ -335,7 +319,7 @@ async fn send_update_message(client: &AsyncClient, message: Message) -> Result<(
         .ok_or_else(|| DnsError::UpdateFailed("DNS update stream ended unexpectedly".to_string()))?
         .map_err(|e| DnsError::UpdateFailed(e.to_string()))?;
 
-    check_update_response(response.response_code())
+    check_update_response(response.metadata.response_code)
 }
 
 fn new_update_message(zone: Name, use_edns: bool) -> Message {
@@ -345,17 +329,15 @@ fn new_update_message(zone: Name, use_edns: bool) -> Message {
         .set_query_class(DNSClass::IN)
         .set_query_type(RecordType::SOA);
 
-    let mut message = Message::new();
-    message
-        .set_id(random())
-        .set_message_type(MessageType::Query)
-        .set_op_code(OpCode::Update)
-        .set_recursion_desired(false);
+    let mut message = Message::query();
+    message.metadata.message_type = MessageType::Query;
+    message.metadata.op_code = OpCode::Update;
+    message.metadata.recursion_desired = false;
     message.add_zone(zone_query);
 
     if use_edns {
         message
-            .extensions_mut()
+            .edns
             .get_or_insert_with(Edns::new)
             .set_max_payload(1232)
             .set_version(0);
@@ -366,7 +348,7 @@ fn new_update_message(zone: Name, use_edns: bool) -> Message {
 
 fn delete_rrset_record(name: Name, record_type: RecordType) -> Record {
     let mut record = Record::update0(name, 0, record_type);
-    record.set_dns_class(DNSClass::ANY);
+    record.dns_class = DNSClass::ANY;
     record
 }
 
@@ -411,9 +393,9 @@ async fn discover_authoritative_zone(
         })?
         .map_err(|e| DnsError::UpdateFailed(e.to_string()))?;
 
-        if response.response_code() == ResponseCode::NoError
+        if response.metadata.response_code == ResponseCode::NoError
             && response
-                .answers()
+                .answers
                 .iter()
                 .any(|answer| answer.record_type() == RecordType::SOA)
         {
@@ -421,7 +403,7 @@ async fn discover_authoritative_zone(
         }
 
         if matches!(
-            response.response_code(),
+            response.metadata.response_code,
             ResponseCode::NoError | ResponseCode::NXDomain
         ) && let Some(soa) = response.soa()
         {
@@ -457,7 +439,7 @@ impl DnsUpdater for Rfc2136DnsUpdater {
             let zone = discover_authoritative_zone(&mut client, &fqdn).await?;
 
             info!(
-                "DNS update via hickory-client (RFC2136): user={}, zone={}, fqdn={}, ipv4={:?}, ipv6={:?}",
+                "DNS update via hickory-net/hickory-proto (RFC2136): user={}, zone={}, fqdn={}, ipv4={:?}, ipv6={:?}",
                 user.username, zone, fqdn, ipv4, ipv6
             );
 
@@ -627,6 +609,20 @@ key "dyn-key" {
     }
 
     #[test]
+    fn new_update_message_uses_rfc2136_metadata_and_edns() {
+        let message = new_update_message(parse_name("example.com.").unwrap(), true);
+
+        assert_eq!(message.metadata.message_type, MessageType::Query);
+        assert_eq!(message.metadata.op_code, OpCode::Update);
+        assert!(!message.metadata.recursion_desired);
+        assert_eq!(message.zones().len(), 1);
+        assert_eq!(message.zones()[0].name().to_utf8(), "example.com.");
+        assert_eq!(message.zones()[0].query_class(), DNSClass::IN);
+        assert_eq!(message.zones()[0].query_type(), RecordType::SOA);
+        assert_eq!(message.edns.as_ref().unwrap().max_payload(), 1232);
+    }
+
+    #[test]
     fn build_update_message_only_touches_requested_rrsets() {
         let zone = parse_name("example.com.").unwrap();
         let fqdn = parse_name("host.example.com.").unwrap();
@@ -641,9 +637,9 @@ key "dyn-key" {
 
         assert_eq!(message.updates().len(), 2);
         assert_eq!(message.updates()[0].record_type(), RecordType::A);
-        assert_eq!(message.updates()[0].dns_class(), DNSClass::ANY);
+        assert_eq!(message.updates()[0].dns_class, DNSClass::ANY);
         assert_eq!(message.updates()[1].record_type(), RecordType::A);
-        assert_eq!(message.updates()[1].dns_class(), DNSClass::IN);
+        assert_eq!(message.updates()[1].dns_class, DNSClass::IN);
     }
 
     #[test]
